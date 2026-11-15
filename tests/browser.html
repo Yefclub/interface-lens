@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Interface Lens — validação no navegador</title>
+<style>
+  body { margin:32px; background:#f7f8fa; color:#20242b; font:14px/1.5 system-ui,sans-serif; }
+  main { max-width:740px; }
+  h1 { font-size:24px; }
+  .examples { display:flex; align-items:center; gap:24px; margin:24px 0; }
+  button { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:32px; padding:0 12px; border:1px solid #b9c1cc; border-radius:8px; background:#fff; font:500 14px/20px Arial,sans-serif; color:inherit; }
+  svg { width:16px; height:16px; flex-shrink:0; }
+  #generated::after { content:"Gerado"; }
+  .slot { display:grid; place-items:center; width:32px; height:32px; border:1px solid #b9c1cc; }
+  #hidden-parent { opacity:0; position:absolute; }
+  #result { white-space:pre-wrap; padding:16px; background:#fff; border:1px solid #d7dce3; }
+</style>
+<main>
+  <h1>Interface Lens</h1>
+  <p>Esta página contém dados sintéticos. Os testes movem ícone e texto, medem o resultado e restauram cada estado.</p>
+  <div class="examples">
+    <button id="sample" aria-label="Salvar exemplo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16"/></svg><span>Salvar</span></button>
+    <div id="slot" class="slot" role="group" aria-label="Caixa do ícone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 4 4L19 6"/></svg></div>
+    <button id="pattern" aria-label="Ação compacta">Compacto</button>
+    <button id="generated" aria-label="Rótulo CSS"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16"/></svg></button>
+    <div id="hidden-parent"><button id="hidden" style="width:44px;height:44px" aria-label="Oculto"><svg style="transform:translateY(6px)" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg></button></div>
+  </div>
+  <button id="run">Executar testes</button>
+  <p id="result" role="status">Aguardando execução.</p>
+</main>
+<script src="../skills/interface-lens/scripts/inspect.js"></script>
+<script>
+  window.runVisualTests=async function() {
+    const results=[];
+    const sample=document.getElementById('sample'), originalNode=sample;
+    const setup=()=>installVisualInspector({cohorts:[{name:'Escala da fixture',selector:'#pattern',height:32}]});
+    setup();
+    const record=(name,condition,detail)=>results.push({name,passed:!!condition,detail});
+    const audit=()=>VisualInspector.audit();
+    record('Estado alinhado sem candidatos',audit().findings.length===0,audit().findings);
+    const parts=audit().internals.find(c=>c.selector==='#sample' || c.selector.includes('Salvar exemplo'))?.parts || [];
+    record('Texto e ícone internos identificados',parts.some(p=>p.type==='Ícone')&&parts.some(p=>p.type==='Texto'));
+    const generated=audit().internals.find(c=>c.selector.includes('Rótulo CSS'));
+    record('Rótulo CSS com ícone centralizado sem falso alerta',generated?.parts.some(p=>p.type==='Texto CSS')&&!audit().findings.some(f=>f.selector.includes('Rótulo CSS')));
+    const icon=sample.querySelector('svg');
+    icon.style.transform='translateY(4px)';
+    record('Ícone deslocado detectado',audit().findings.some(f=>f.rule==='icone-texto-y'&&f.deltaPx>=3));
+    icon.style.transform='';
+    const label=sample.querySelector('span');
+    label.style.transform='translateY(4px)';
+    record('Texto deslocado detectado',audit().findings.some(f=>f.rule==='icone-texto-y'&&f.deltaPx>=3));
+    label.style.transform='';
+    const gridIcon=document.querySelector('#slot svg');
+    gridIcon.style.transform='translateX(4px)';
+    record('Ícone deslocado dentro de grid detectado',audit().findings.some(f=>f.rule==='icone-slot-x'&&f.deltaPx===4));
+    gridIcon.style.transform='';
+    document.getElementById('pattern').style.height='24px';
+    record('Violação de altura contratada detectada',audit().findings.some(f=>f.rule==='padrao-height'&&f.deltaPx===8));
+    document.getElementById('pattern').style.height='';
+    record('Conteúdo oculto excluído',!VisualInspector.measurements().components.some(c=>c.label==='Oculto'));
+    record('Restauração sem candidatos residuais',audit().findings.length===0,audit().findings);
+    record('Seleção programática mede o alvo',VisualInspector.select('#sample')?.height===32);
+    VisualInspector.remove();
+    record('DOM original preservado e camada removida',originalNode===document.getElementById('sample')&&!document.getElementById('visual-inspector-guides')&&!document.getElementById('visual-inspector-guide-controls'));
+    setup();
+    window.visualTestResults={passed:results.every(r=>r.passed),results};
+    document.getElementById('result').textContent=results.map(r=>(r.passed?'PASSOU':'FALHOU')+' — '+r.name).join('\n');
+    return window.visualTestResults;
+  };
+  document.getElementById('run').addEventListener('click',runVisualTests);
+</script>
+</html>

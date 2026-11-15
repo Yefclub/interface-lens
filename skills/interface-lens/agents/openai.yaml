@@ -1,0 +1,4 @@
+interface:
+  display_name: "Interface Lens"
+  short_description: "Refine interfaces com inspeção visual verificável"
+  default_prompt: "Use $interface-lens para melhorar esta interface, observar o resultado real e corrigir os desalinhamentos encontrados."
