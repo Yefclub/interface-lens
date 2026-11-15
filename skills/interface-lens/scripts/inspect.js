@@ -256,6 +256,13 @@ function installVisualInspector(options) {
     }
     const textOwners=new Set(m.internals.filter(c=>c.parts.some(p=>p.type.startsWith('Texto'))).map(c=>c.element));
     for (const {element:e} of m.components) {
+      const parent=e.parentElement;
+      if (parent && !e.matches('svg,img') && !['absolute','fixed'].includes(computed(e).position)) {
+        const css=computed(parent), self=computed(e).alignSelf;
+        if (/flex/.test(css.display) && css.flexDirection==='row' && css.flexWrap==='nowrap' && css.alignItems==='center' && (self==='auto'||self==='center')) {
+          add('componente-linha-y',e,Math.abs(centerY(e)-centerY(parent)),'O componente está deslocado do eixo vertical da sua linha; confira a intenção.','candidato');
+        }
+      }
       if (textOwners.has(e)) continue;
       if (e.children.length!==1 || !e.firstElementChild.matches('svg,img') || e.textContent.trim()) continue;
       const css=computed(e), icon=e.firstElementChild;

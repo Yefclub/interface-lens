@@ -50,6 +50,9 @@
     label.style.transform='translateY(4px)';
     record('Texto deslocado detectado',audit().findings.some(f=>f.rule==='icone-texto-y'&&f.deltaPx>=3));
     label.style.transform='';
+    sample.style.transform='translateY(4px)';
+    record('Alvo de clique deslocado na linha detectado',audit().findings.some(f=>f.rule==='componente-linha-y'&&f.deltaPx===4));
+    sample.style.transform='';
     const gridIcon=document.querySelector('#slot svg');
     gridIcon.style.transform='translateX(4px)';
     record('Ícone deslocado dentro de grid detectado',audit().findings.some(f=>f.rule==='icone-slot-x'&&f.deltaPx===4));
