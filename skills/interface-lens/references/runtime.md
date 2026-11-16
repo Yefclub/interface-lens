@@ -11,7 +11,8 @@ O runtime não envia dados nem persiste preferências. Os retornos são locais e
 | `report({ maxFindings })` | Texto curto com tecnologias, tema, tokens, componentes, cobertura e achados. Ponto de partida para o agente. |
 | `context()` | O contexto do produto em dados. Formato abaixo. |
 | `audit()` | `findings`, `coverage`, `focus`, `tolerancePx` e `internals` (partes de texto e ícone de cada controle). `status: "heuristic"` é deliberado. |
-| `scan({ maxScreens })` | Assíncrona. Rola a janela tela a tela, junta os achados de cada trecho (cada um com `scrollY`) e devolve a rolagem ao ponto inicial. Retorna `screens`, `complete` e `findings`. Não alcança contêineres com rolagem própria. |
+| `scan({ maxScreens })` | Assíncrona. Rola a página tela a tela, junta os achados de cada trecho (cada um com `scrollTop`) e devolve a rolagem ao ponto inicial. Quando a janela não rola, usa o maior contêiner com rolagem própria. Retorna `screens`, `complete`, `scroller` e `findings`. |
+| `focusScan({ max })` | Assíncrona. Dá foco a cada controle visível, compara a aparência com a de repouso e devolve o foco a quem o tinha. Retorna `checked`, `supported` e `withoutIndicator`. `supported: false` indica que o navegador não tratou o foco por script como foco de teclado; nesse caso, navegue com Tab. |
 | `measurements()` | Componentes, níveis, nome de framework e retângulos em pixels CSS. |
 | `snapshot()` | Rota, viewport, componentes com retângulo e estilo, e achados. É JSON: guarde no agente para sobreviver a recargas. |
 | `diff(antes, depois?)` | `added`, `removed`, `moved`, `resized`, `restyled`, `unchanged` e `findings` (`resolved`, `introduced`, `remaining`). Sem `depois`, compara com o estado atual. |
@@ -81,12 +82,23 @@ Cada achado traz `rule`, `category` (`alinhamento`, `consistência`, `legibilida
 | `clicavel-sem-papel` | Elemento clicável sem papel de botão ou link. |
 | `hierarquia-titulos` | Título que pula níveis em relação ao anterior. |
 | `zoom-bloqueado` | Meta viewport com `user-scalable=no` ou `maximum-scale` abaixo de 2. |
+| `foco-sem-indicador` | Controle que recebeu foco de teclado e não mudou de aparência. Só entra o que foi observado com foco. |
+| `espaco-fora-da-escala` | Padding ou gap ímpar, usado no máximo duas vezes, em uma tela onde ao menos 85% dos espaçamentos são pares. A borda conta junto com o padding. |
+| `sobreposicao-texto` | Textos de elementos diferentes ocupando o mesmo lugar. Camadas duplicadas do mesmo texto ficam de fora. |
 | `padrao-width`, `padrao-height` | Dimensão declarada em `cohorts`. |
 | `coluna-titulos`, `centro-toolbar`, `altura-toolbar`, `coluna-acoes`, `sombra-prompt` | Regiões declaradas em `selectors` e `requirements`. |
 
 Irmãos são comparados quando o contêiner tem ao menos três filhos visíveis da mesma tag, em uma única linha ou coluna; `div` e `span` também precisam ter as mesmas classes. Só há referência quando a maioria concorda.
 
 `report()` agrupa os achados por regra: uma linha com o primeiro alvo, a contagem e mais três seletores. A lista completa fica em `audit().findings`.
+
+## Foco de teclado
+
+O indicador de foco não é deduzido do CSS: regras aninhadas, classes aplicadas por JavaScript e folhas de outra origem tornam essa leitura pouco confiável. O inspetor observa. Quando um controle recebe foco de teclado (`:focus-visible`) e fica focado por ao menos dois quadros, a aparência dele, dos seus pseudo-elementos e de até três ancestrais é guardada e comparada com a de repouso depois do blur. Qualquer mudança conta como indicador.
+
+Há dois caminhos para gerar essas observações: navegar com Tab pelo harness ou chamar `focusScan()`. `coverage.focusChecked` e a linha `Foco de teclado` do relatório dizem quantos controles foram observados. Sem observação não há achado: zero ocorrências de `foco-sem-indicador` com `focusChecked` em zero não quer dizer que o foco está visível.
+
+`focusScan()` move o foco de verdade e pode acionar o que a aplicação faz ao focar um campo, como abrir uma lista de sugestões.
 
 ## Contexto
 
@@ -176,5 +188,7 @@ O inspetor mede o próprio custo. Em páginas pesadas ou que mudam a todo instan
 `report()` avisa quando há frames de mesma origem sem inspeção e quando um canvas de aplicação ocupa a maior parte da tela.
 
 Um candidato de centro texto/ícone merece comparação visual. Uma letra com descendente não tem a mesma massa visual de um símbolo simétrico. A caixa de layout, o desenho visível e a baseline respondem perguntas diferentes; não corrija uma delas cegamente para zerar outra.
+
+O contraste é medido contra o que está pintado atrás do texto. Quando há uma imagem, um vídeo, um gradiente ou um fundo desenhado em pseudo-elemento, não há cor única para comparar e o texto fica fora da regra.
 
 O relatório não decide a intenção do designer nem comprova conformidade completa de acessibilidade. Inspecione a tela final e registre os estados efetivamente cobertos.

@@ -21,6 +21,19 @@ async function panelInteraction(page) {
   await page.reload();
   await settle();
 
+  // Foco de teclado de verdade: o primeiro Tab leva ao primeiro botão, que teve o contorno removido.
+  await page.evaluate(() => { document.getElementById('sample').style.outline = 'none'; });
+  await page.keyboard.press('Tab');
+  // O estado focado só é registrado depois de dois quadros, para não confundir uma transição em curso com falta de indicador.
+  const frames = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+  const focused = await page.evaluate(() => document.activeElement.id);
+  await frames();
+  await page.keyboard.press('Tab');
+  await frames();
+  const noRing = await page.evaluate(() => VisualInspector.audit().findings.filter(f => f.rule === 'foco-sem-indicador').map(f => f.selector));
+  record('Controle sem indicador é acusado depois de receber foco por Tab', focused === 'sample' && noRing.length === 1 && noRing[0].includes('Salvar exemplo'), { focused, noRing });
+  await page.evaluate(() => { document.getElementById('sample').style.outline = ''; document.activeElement.blur(); });
+
   // Detectores de "clique fora" das aplicações escutam o documento; o painel não pode dispará-los.
   await page.evaluate(() => { window.pageEvents = []; for (const type of ['pointerdown', 'mousedown', 'click']) document.addEventListener(type, () => window.pageEvents.push(type), true); });
   const tab = await page.evaluate(() => { const b=document.getElementById('visual-inspector-panel').shadowRoot.getElementById('vi-tab-context').getBoundingClientRect(); return { x:b.x+b.width/2, y:b.y+b.height/2 }; });

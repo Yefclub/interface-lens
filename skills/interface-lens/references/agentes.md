@@ -82,6 +82,10 @@ O painel aparece nas capturas. Use `VisualInspector.togglePanel()` para ocultá-
 
 Com um modal, um drawer ou um menu aberto, o inspetor mede só essa camada. Abra a camada pelo produto, chame `VisualInspector.report()` e confira a linha `Foco`. Para medir o que ficou atrás, feche a camada ou use `VisualInspector.toggleFocus()`.
 
+## Foco de teclado
+
+`await VisualInspector.focusScan()` dá foco a cada controle visível e aponta os que não mudam de aparência. Se devolver `supported: false`, o navegador não tratou o foco por script como foco de teclado: pressione Tab pelo harness, parando ao menos dois quadros em cada controle, e leia `audit()` depois. A varredura move o foco de verdade; use quando a tela puder receber foco sem efeito indesejado.
+
 ## Temas
 
 `context().theme.themes` informa o seletor de cada tema e onde ele é aplicado. Prefira o controle do próprio produto para alternar, porque ele também atualiza a persistência e o `color-scheme`. Em um mock, aplicar a classe ou o atributo na raiz é suficiente; restaure depois. Repita a inspeção em cada tema que a mudança afeta.

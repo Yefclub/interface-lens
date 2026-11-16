@@ -176,6 +176,17 @@
     $('pattern').style.borderRadius='7px';
     record('Raio quase igual ao dos demais detectado',found('quase-igual-raio',f=>f.deltaPx===1));
     $('pattern').style.borderRadius='';
+    third.style.paddingLeft='13px';
+    record('Espaçamento ímpar em tela de espaçamentos pares detectado',found('espaco-fora-da-escala',f=>f.component==='Terceiro'),audit().findings);
+    third.style.paddingLeft='';
+    $('tile').style.marginLeft='-90px';
+    record('Texto sobreposto a outro texto detectado',found('sobreposicao-texto',f=>f.selector==='#tile'),audit().findings);
+    $('tile').style.marginLeft='';
+    $('pattern').style.outline='none';
+    const focusRun=await VisualInspector.focusScan();
+    record('Varredura de foco acusa o controle sem indicador',!focusRun.supported||focusRun.withoutIndicator.includes('button[aria-label="Ação compacta"]')&&!focusRun.withoutIndicator.includes('#run'),focusRun);
+    $('pattern').style.outline='';
+    record('Indicador de foco restaurado deixa de ser acusado',(await VisualInspector.focusScan()).withoutIndicator.length===0);
     record('Achados trazem a categoria',(()=>{ $('intro').style.color='#c5c9d0'; const f=audit().findings.find(x=>x.rule==='contraste-texto'); $('intro').style.color=''; return f?.category==='legibilidade'; })());
     const scan=await VisualInspector.scan();
     record('Varredura da página encontra o que está fora da primeira tela',scan.complete&&scan.findings.some(f=>f.rule==='icone-botao-y'&&f.selector.includes('Fora da primeira tela'))&&!found('icone-botao-y')&&scrollY===0,scan);

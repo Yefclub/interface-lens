@@ -1,6 +1,6 @@
 /* Interface Lens: inspetor visual. Execute como Snippet ou injete em qualquer página.
  * Lê DOM, estilos, caixas de texto e ícones; não altera o conteúdo da página.
- * API: VisualInspector.report(), .context(), .audit(), .scan(), .measurements(), .snapshot(), .diff(), .refresh(),
+ * API: VisualInspector.report(), .context(), .audit(), .scan(), .focusScan(), .measurements(), .snapshot(), .diff(), .refresh(),
  *      .select(), .toggleFocus(), .toggleGuides(), .togglePanel(), .movePanel(), .remove().
  */
 function installVisualInspector(options) {
@@ -11,7 +11,7 @@ function installVisualInspector(options) {
     return null;
   }
   window.VisualInspector?.remove();
-  const VERSION='3.2.0';
+  const VERSION='3.3.0';
   const style=options.mockStyle || null;
   const hooks=options.selectors || {};
   const nameAttributes=options.nameAttributes || [];
@@ -390,18 +390,44 @@ function installVisualInspector(options) {
     if (!backdropCache.has(e)) backdropCache.set(e,readBackdrop(e));
     return backdropCache.get(e);
   }
+  // Fundo desenhado em ::before ou ::after posicionado: existe na tela, mas não tem nó no DOM para medir.
+  const pseudoPaint=new WeakMap();
+  const paintsWithPseudo=a=>{
+    if (!pseudoPaint.has(a)) pseudoPaint.set(a,['::before','::after'].some(pseudo=>{
+      const c=getComputedStyle(a,pseudo);
+      return c.content!=='none' && /absolute|fixed/.test(c.position) && (c.backgroundImage!=='none' || (rgba(c.backgroundColor)?.[3] ?? 0)>0);
+    }));
+    return pseudoPaint.get(a);
+  };
   function readBackdrop(e) {
     const layers=[];
     let base=null;
     for (let a=e; a && !base; a=up(a)) {
       const c=computed(a);
-      if (c.backgroundImage!=='none' || +c.opacity<1 || c.filter!=='none') return null;
+      if (c.backgroundImage!=='none' || +c.opacity<1 || c.filter!=='none' || a!==e && paintsWithPseudo(a)) return null;
       const bg=rgba(c.backgroundColor);
       if (bg && bg[3]===1) base=bg; else if (bg && bg[3]>0) layers.push(bg);
     }
     base ||= canvasColor();
     for (const layer of layers.reverse()) base=over(layer,base);
     return base;
+  }
+  // O que está pintado logo atrás do texto pode ser uma camada irmã (imagem ou fundo posicionado), não um ancestral.
+  // Devolve a cor dessa camada, null quando é imagem ou gradiente, ou o fundo dos ancestrais quando não há camada.
+  function behindText(p, fallback) {
+    const c=clipRect(p);
+    if (!c) return fallback;
+    let passed=computed(p).pointerEvents==='none';
+    for (const n of p.getRootNode().elementsFromPoint((c.left+c.right)/2,(c.top+c.bottom)/2)) {
+      if (own(n)) continue;
+      if (within(n,p)) { passed=true; continue; }
+      if (!passed) continue;
+      const css=computed(n), bg=rgba(css.backgroundColor);
+      if (within(p,n)) { if (bg && bg[3]===1) return fallback; continue; }
+      if (/^(img|video|canvas|picture)$/.test(n.localName) || css.backgroundImage!=='none') return null;
+      if (bg && bg[3]===1) return bg;
+    }
+    return fallback;
   }
   const radiusOf=e=>{
     const v=computed(e).borderTopLeftRadius.split(' ')[0], n=parseFloat(v) || 0, b=box(e);
@@ -619,7 +645,7 @@ function installVisualInspector(options) {
       const type=custom.type || ROLES[role] || TAGS[e.tagName.toUpperCase()] || (clickables.has(e) ? 'Clicável' : textParents.has(e) ? 'Texto' : surfaces.has(e) ? 'Superfície' : blocks.has(e) ? 'Bloco' : 'Grupo');
       const chart=chartOf(e), large=e.localName==='svg' && Math.max(box(e).width,box(e).height)>48;
       const kind=custom.type || (chart ? 'Gráfico' : large ? 'Imagem vetorial' : type);
-      const name=custom.name || ['aria-label',...nameAttributes,'alt','title'].map(a=>e.getAttribute(a)).find(Boolean) || (['Botão','Linha','Título','Texto','Link'].includes(kind) ? e.textContent.trim().slice(0,64) : surfaces.has(e) && (e.querySelector('h1,h2,h3,h4,h5,h6,[role="heading"]')?.textContent || e.textContent).trim().replace(/\s+/g,' ').slice(0,40) || chart || kind);
+      const name=custom.name || ['aria-label',...nameAttributes,'alt','title'].map(a=>e.getAttribute(a)).find(Boolean) || (['Botão','Linha','Título','Texto','Link'].includes(kind) ? e.textContent.trim().slice(0,64) : surfaces.has(e) && (e.querySelector('h1,h2,h3,h4,h5,h6,[role="heading"]')?.textContent.trim() || (e.innerText || '').split('\n').map(line=>line.trim()).filter(Boolean).slice(0,2).join(' · ')).replace(/\s+/g,' ').slice(0,40) || chart || kind);
       return { element:e, parent, level, type:kind, name, component:componentName(e) };
     });
     // Card: superfície com borda, raio ou sombra que agrupa mais de um componente.
@@ -719,15 +745,43 @@ function installVisualInspector(options) {
     }
     return groups;
   }
+  // Aparência que costuma mudar com o foco: o próprio controle, seus pseudo-elementos e até três ancestrais (focus-within).
+  const FOCUS_LOOK=['outlineStyle','outlineWidth','outlineColor','outlineOffset','boxShadow','borderTopColor','borderBottomColor','borderLeftColor','backgroundColor','textDecorationLine','opacity'];
+  const look=(e,pseudo)=>{ const c=getComputedStyle(e,pseudo); return FOCUS_LOOK.map(name=>c[name]).join('|'); };
+  function focusLook(e) {
+    const parts=[look(e),look(e,'::before'),look(e,'::after')];
+    for (let a=up(e), depth=0; a && depth<3; a=up(a), depth++) parts.push(look(a));
+    return parts.join('§');
+  }
+  const twoFrames=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  // Resultado por controle já visto com foco de teclado: o estado focado é comparado com o de repouso, lido depois do blur.
+  const focusSeen=new WeakMap(), focusPending=new WeakMap();
+  let focusScanning=false;
+  const noteFocus=(e,visible)=>focusSeen.set(e,{ visible });
+  async function onFocusIn(event) {
+    const e=event.composedPath()[0];
+    if (focusScanning || !(e instanceof Element) || event.composedPath().includes(host) || !e.matches(':focus-visible')) return;
+    await twoFrames();
+    if (e.matches(':focus')) focusPending.set(e,focusLook(e));
+  }
+  async function onFocusOut(event) {
+    const e=event.composedPath()[0];
+    if (focusScanning || !(e instanceof Element) || !focusPending.has(e)) return;
+    await twoFrames();
+    if (e.matches(':focus')) return;
+    noteFocus(e,focusPending.get(e)!==focusLook(e));
+    focusPending.delete(e);
+    schedule();
+  }
   const findingElement=new WeakMap();
   const CATEGORY={};
   for (const [category,rules] of Object.entries({
     alinhamento:'icone-texto-y icone-botao-x icone-botao-y conteudo-botao-x icone-slot-x icone-slot-y componente-linha-y coluna-titulos centro-toolbar coluna-acoes',
-    consistência:'ritmo-gap borda-inicial dimensao-irmaos raio-concentrico quase-igual-altura quase-igual-raio altura-toolbar padrao-width padrao-height sombra-prompt esquema-nativo',
+    consistência:'ritmo-gap borda-inicial dimensao-irmaos raio-concentrico quase-igual-altura quase-igual-raio espaco-fora-da-escala altura-toolbar padrao-width padrao-height sombra-prompt esquema-nativo',
     legibilidade:'texto-cortado contraste-texto texto-pequeno',
-    layout:'estouro-horizontal',
+    layout:'estouro-horizontal sobreposicao-texto',
     mídia:'imagem-quebrada imagem-distorcida',
-    acessibilidade:'alvo-minimo controle-sem-nome imagem-sem-alt campo-sem-rotulo clicavel-sem-papel hierarquia-titulos zoom-bloqueado'
+    acessibilidade:'alvo-minimo controle-sem-nome imagem-sem-alt campo-sem-rotulo clicavel-sem-papel hierarquia-titulos zoom-bloqueado foco-sem-indicador'
   })) for (const rule of rules.split(' ')) CATEGORY[rule]=category;
   function inspectRules(m) {
     const findings=[];
@@ -825,6 +879,9 @@ function installVisualInspector(options) {
       if (!fg || !fg[3] || !bg) continue;
       const size=parseFloat(css.fontSize), need=size>=24 || size>=18.66 && +css.fontWeight>=700 ? 3 : 4.5, ratio=contrast(over(fg,bg),bg);
       if (ratio>=need) continue;
+      // Antes de acusar, confere o que há de fato atrás do texto: sobre imagem não há como medir.
+      const real=behindText(p,bg);
+      if (!real || real!==bg && contrast(over(fg,real),real)>=need) continue;
       const key=hex(fg)+hex(bg)+need, pair=pairs.get(key) || pairs.set(key,{ element:p, count:0, ratio, need, fg:hex(fg), bg:hex(bg) }).get(key);
       pair.count++;
     }
@@ -898,6 +955,35 @@ function installVisualInspector(options) {
     }
     const scale=document.querySelector('meta[name="viewport"]')?.content || '';
     if (/user-scalable\s*=\s*(no|0)/i.test(scale) || parseFloat(/maximum-scale\s*=\s*([\d.]+)/i.exec(scale)?.[1])<2) flag('zoom-bloqueado',document.documentElement,null,'O meta viewport impede ou limita o zoom da página.','medido');
+    // Foco do teclado, por observação: só entra o controle que já foi visto com foco e não mudou de aparência.
+    for (const e of m.controls) if (focusSeen.get(e)?.visible===false) flag('foco-sem-indicador',e,null,'Ao receber o foco pelo teclado o controle não muda de aparência; quem navega pelo teclado não vê onde está.','medido');
+    // Espaçamento ímpar em uma tela de espaçamentos pares. A borda conta junto: padding de 7 px com borda de 1 px fecha em 8.
+    const spaces=new Map();
+    let even=0, measured=0;
+    for (const { element:e } of m.components) {
+      const css=computed(e), flex=/flex|grid/.test(css.display);
+      for (const [value,border] of [[css.paddingTop,css.borderTopWidth],[css.paddingLeft,css.borderLeftWidth],[flex ? css.columnGap : '','0'],[flex ? css.rowGap : '','0']]) {
+        const size=parseFloat(value), edge=parseFloat(border) || 0;
+        if (!(size>2) || !Number.isInteger(size)) continue;
+        measured++;
+        if (size%2===0 || Number.isInteger(edge) && (size+edge)%2===0) { even++; continue; }
+        (spaces.get(size) || spaces.set(size,[]).get(size)).push(e);
+      }
+    }
+    if (measured>=20 && even/measured>=.85) for (const [size,list] of spaces) {
+      if (list.length<=2) flag('espaco-fora-da-escala',list[0],null,`Espaçamento de ${size} px${list.length>1 ? ` em ${list.length} lugares` : ''}; ${Math.round(even/measured*100)}% dos espaçamentos desta tela são pares.`,'candidato',{ count:list.length });
+    }
+    // Textos de elementos diferentes ocupando o mesmo lugar.
+    const texts=m.internals.flatMap(c=>c.parts.filter(p=>p.type==='Texto' && p.bounds.height>=8 && p.bounds.width>=8)).sort((a,b)=>a.bounds.y-b.bounds.y);
+    const collided=new Set();
+    for (let i=0; i<texts.length; i++) for (let j=i+1; j<texts.length && texts[j].bounds.y<texts[i].bounds.bottom; j++) {
+      const a=texts[i], b=texts[j];
+      if (a.element===b.element || within(a.element,b.element) || within(b.element,a.element) || collided.has(b.element) || a.text.includes(b.text) || b.text.includes(a.text)) continue;
+      const width=Math.min(a.bounds.right,b.bounds.right)-Math.max(a.bounds.x,b.bounds.x), height=Math.min(a.bounds.bottom,b.bounds.bottom)-Math.max(a.bounds.y,b.bounds.y);
+      if (width<=0 || height<=0 || width*height<.4*Math.min(a.bounds.width*a.bounds.height,b.bounds.width*b.bounds.height)) continue;
+      collided.add(b.element);
+      flag('sobreposicao-texto',b.element,null,`Texto sobreposto a outro texto: “${b.text.slice(0,24)}” sobre “${a.text.slice(0,24)}”.`,'candidato');
+    }
     // Um valor quase igual ao padrão da tela costuma ser acidente: 35 px entre controles de 36 px, raio de 7 px entre raios de 8 px.
     const nearMiss=(rule,items,limit,describe)=>{
       const groups=new Map();
@@ -1106,6 +1192,8 @@ function installVisualInspector(options) {
     add('Vite (servidor de desenvolvimento)','build',marker('script[src*="/@vite/client"]','/@vite/client'));
     const generator=document.querySelector('meta[name="generator"]')?.content;
     add(generator,'gerador',generator && 'meta generator');
+    const custom=new Set(all('*').map(e=>e.localName).filter(tag=>tag.includes('-') && customElements.get(tag)));
+    add('Web Components','framework',custom.size>=3 && `${custom.size} elementos customizados registrados`);
     add('Tailwind CSS','estilo',token('--tw-'),scan.layers.has('theme') && scan.layers.has('utilities') ? '4' : undefined);
     for (const [prefix,name] of Object.entries({ '--bs-':'Bootstrap', '--cui-':'CoreUI', '--chakra-':'Chakra UI', '--mantine-':'Mantine', '--mui-':'MUI', '--ant-':'Ant Design', '--el-':'Element Plus', '--v-theme-':'Vuetify', '--ion-':'Ionic', '--sl-':'Shoelace', '--cds-':'Carbon', '--spectrum-':'Spectrum', '--md-sys-':'Material Web', '--bulma-':'Bulma' })) add(name,'estilo',token(prefix));
     const named=n=>found.some(f=>f.name===n);
@@ -1574,6 +1662,8 @@ function installVisualInspector(options) {
   document.addEventListener('scroll', schedule, true);
   document.addEventListener('transitionend', schedule, true);
   document.addEventListener('pointerover', inspect, true);
+  document.addEventListener('focusin', onFocusIn, true);
+  document.addEventListener('focusout', onFocusOut, true);
   const resizeObserver = new ResizeObserver(schedule);
   // Quando o conteúdo do painel muda de tamanho, ele se reancora no mesmo quadro, sem medir a página de novo.
   const panelObserver = new ResizeObserver(()=>{ if (last && panelOn) dockPanel(last.m); });
@@ -1611,7 +1701,7 @@ function installVisualInspector(options) {
     },
     audit() {
       const m=measure();
-      return { status:'heuristic',coverage:{controls:m.controls.length,components:m.components.length,internalParts:m.internals.reduce((n,c)=>n+c.parts.length,0),shadowRoots:roots.length-1,covered:m.focus.covered,frames:m.frames},focus:m.focus,tolerancePx:options.tolerancePx ?? 1, findings:inspectRules(m), typography:'Range mede caixas de texto; baseline e caixa de glifo são estimativas de TextMetrics.',
+      return { status:'heuristic',coverage:{controls:m.controls.length,components:m.components.length,internalParts:m.internals.reduce((n,c)=>n+c.parts.length,0),shadowRoots:roots.length-1,covered:m.focus.covered,frames:m.frames,focusChecked:m.controls.filter(e=>focusSeen.has(e)).length},focus:m.focus,tolerancePx:options.tolerancePx ?? 1, findings:inspectRules(m), typography:'Range mede caixas de texto; baseline e caixa de glifo são estimativas de TextMetrics.',
         internals:m.internals.map(c=>({ selector:selector(c.element), level:componentMap.get(c.element)?.level,
           parts:c.parts.map(p=>({ type:p.type,text:p.text,level:(componentMap.get(c.element)?.level||0)+1,inferred:!!p.inferred,bounds:p.bounds,baselineApprox:p.baselineApprox,inkTopApprox:p.inkTopApprox,inkBottomApprox:p.inkBottomApprox })) })) };
     },
@@ -1652,19 +1742,54 @@ function installVisualInspector(options) {
       out.findings.remaining=after.findings.length-out.findings.introduced.length;
       return out;
     },
+    // Dá foco a cada controle visível, compara com o estado de repouso e devolve o foco a quem o tinha.
+    // Só vale quando o navegador trata o foco por script como foco de teclado (:focus-visible); senão, navegue com Tab.
+    async focusScan({ max=80 }={}) {
+      const m=measure(), previous=document.activeElement;
+      const list=m.controls.filter(e=>e.tabIndex>=0 && !e.matches('[disabled],[aria-disabled="true"]')).slice(0,max);
+      let checked=0, supported=true;
+      focusScanning=true;
+      try {
+        for (const e of list) {
+          const rest=focusLook(e);
+          e.focus({ preventScroll:true, focusVisible:true });
+          if (e.getRootNode().activeElement!==e) continue;
+          if (!e.matches(':focus-visible')) { supported=false; break; }
+          await twoFrames();
+          noteFocus(e,focusLook(e)!==rest);
+          checked++;
+        }
+      } finally {
+        document.activeElement?.blur?.();
+        if (previous && previous!==document.body) previous.focus?.({ preventScroll:true });
+        focusScanning=false;
+      }
+      schedule();
+      return { checked, supported, withoutIndicator:list.filter(e=>focusSeen.get(e)?.visible===false).map(selector) };
+    },
     // Percorre a página rolando a janela e junta os achados de cada trecho; devolve a rolagem ao ponto inicial.
     async scan({ maxScreens=12 }={}) {
-      const start=[scrollX,scrollY], found=new Map(), step=Math.max(1,Math.round(innerHeight*.9));
-      let screens=0, y=0;
-      for (; screens<maxScreens; screens++, y+=step) {
-        scrollTo({ left:start[0], top:y, behavior:'instant' }); // instant ignora o scroll-behavior: smooth da página
+      // Em aplicações de layout fixo quem rola é um contêiner interno: vale o maior que ocupa boa parte da tela.
+      const page=document.scrollingElement || document.documentElement;
+      measure();
+      const inner=page.scrollHeight>innerHeight+1 ? null : all('*').filter(e=>{
+        const css=computed(e), b=box(e);
+        return /auto|scroll/.test(css.overflowY) && e.scrollHeight>e.clientHeight+40 && b.width*b.height>=innerWidth*innerHeight*.3 && visible(e);
+      }).sort((a,b)=>box(b).width*box(b).height-box(a).width*box(a).height)[0];
+      const target=inner || page, view=inner ? inner.clientHeight : innerHeight;
+      const start=target.scrollTop, found=new Map(), step=Math.max(1,Math.round(view*.9));
+      const atEnd=()=>target.scrollTop+view>=target.scrollHeight-1;
+      let screens=0;
+      for (let y=0; screens<maxScreens; y+=step) {
+        target.scrollTo({ top:y, behavior:'instant' }); // instant ignora o scroll-behavior: smooth da página
         await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-        for (const f of inspectRules(measure())) if (!found.has(f.rule+' '+f.selector)) found.set(f.rule+' '+f.selector,{ ...f, scrollY:Math.round(scrollY) });
-        if (scrollY+innerHeight>=document.documentElement.scrollHeight-1) { screens++; break; }
+        for (const f of inspectRules(measure())) if (!found.has(f.rule+' '+f.selector)) found.set(f.rule+' '+f.selector,{ ...f, scrollTop:Math.round(target.scrollTop) });
+        screens++;
+        if (atEnd()) break;
       }
-      const complete=scrollY+innerHeight>=document.documentElement.scrollHeight-1;
-      scrollTo({ left:start[0], top:start[1], behavior:'instant' });
-      return { screens, complete, findings:[...found.values()] };
+      const complete=atEnd();
+      target.scrollTo({ top:start, behavior:'instant' });
+      return { screens, complete, scroller:inner ? selector(inner) : 'janela', findings:[...found.values()] };
     },
     // Resumo em texto: uma chamada entrega contexto e achados sem inflar a conversa do agente.
     report({ maxFindings=20 }={}) {
@@ -1686,6 +1811,8 @@ function installVisualInspector(options) {
       lines.push(`Cobertura: ${m.components.length} componentes, ${m.controls.length} controles, ${roots.length-1} shadow roots abertos, somente a área visível`);
       if (!m.focus.on) lines.push('Foco: desligado; elementos cobertos por outras camadas entram na inspeção');
       else if (m.focus.covered) lines.push(`Foco: ${m.focus.layer ? `diálogo${m.focus.layer.name ? ' “'+m.focus.layer.name+'”' : ''} (${m.focus.layer.selector})` : 'camadas da frente'}; ${m.focus.covered} elementos cobertos ficaram de fora`);
+      const focusChecked=m.controls.filter(e=>focusSeen.has(e)).length;
+      lines.push(focusChecked ? `Foco de teclado: ${focusChecked} de ${m.controls.length} controles observados com foco` : 'Foco de teclado: nenhum controle observado com foco; navegue com Tab ou use await VisualInspector.focusScan()');
       if (m.frames) lines.push(`Frames: ${m.frames} de mesma origem sem inspeção; injete o inspetor dentro do frame`);
       if (m.canvas) lines.push('Canvas: ocupa a maior parte da tela; o que é desenhado nele não é inspecionável');
       lines.push(`Achados (${findings.length}):`+(findings.length ? '' : ' nenhum candidato automático; a composição ainda exige inspeção visual'));
@@ -1707,6 +1834,8 @@ function installVisualInspector(options) {
       document.removeEventListener('scroll', schedule, true);
       document.removeEventListener('transitionend', schedule, true);
       document.removeEventListener('pointerover', inspect, true);
+      document.removeEventListener('focusin', onFocusIn, true);
+      document.removeEventListener('focusout', onFocusOut, true);
       document.removeEventListener('toggle', schedule, true);
       for (const type of ROUTED) window.removeEventListener(type,routed,true);
       window.removeEventListener('pointermove',moveDrag,true);

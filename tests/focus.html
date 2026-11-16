@@ -29,6 +29,8 @@
     <button id="page-action">Ação da página</button>
     <button id="run">Executar testes</button>
     <p id="result" role="status">Aguardando execução.</p>
+    <div style="height:1200px"></div>
+    <button id="deep" aria-label="No fim da rolagem interna" style="display:inline-flex;align-items:center;justify-content:center;width:32px;padding:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="transform:translateY(5px)"><path d="M12 4v16M4 12h16"/></svg></button>
   </main>
 </div>
 <div id="overlay" hidden><div class="backdrop"></div><div class="sheet" role="dialog" aria-labelledby="sheet-title"><h2 id="sheet-title">Editar perfil</h2><p>Modal feito com div e pano de fundo.</p><button id="sheet-save">Salvar</button></div></div>
@@ -69,6 +71,9 @@
     record('Guias e painel sobem para a top layer acima do dialog',top('visual-inspector-guides')&&top('visual-inspector-panel'));
     $('native').close();
     record('Fechar a camada devolve a página ao foco',sees('Ação da página')&&focus().layer===null,focus());
+
+    const scan=await VisualInspector.scan();
+    record('Varredura rola o contêiner interno quando a janela não rola',scan.scroller==='#app'&&scan.complete&&scan.findings.some(f=>f.selector.includes('No fim da rolagem interna'))&&$('app').scrollTop===0,scan);
 
     const hints=VisualInspector.context().platform.map(h=>h.query);
     record('Padrão feito à mão vira sugestão de busca',hints.includes('modal dialog element'),hints);
