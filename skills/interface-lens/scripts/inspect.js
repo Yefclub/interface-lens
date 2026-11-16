@@ -368,7 +368,12 @@ function installVisualInspector(options) {
     return dark ? [18,18,18,1] : [255,255,255,1];
   }
   // Cor efetiva atrás do elemento; null quando imagem, gradiente, filtro ou opacidade impedem a leitura.
+  let backdropCache=new WeakMap();
   function backdrop(e) {
+    if (!backdropCache.has(e)) backdropCache.set(e,readBackdrop(e));
+    return backdropCache.get(e);
+  }
+  function readBackdrop(e) {
     const layers=[];
     let base=null;
     for (let a=e; a && !base; a=up(a)) {
@@ -385,10 +390,29 @@ function installVisualInspector(options) {
     const v=computed(e).borderTopLeftRadius.split(' ')[0], n=parseFloat(v) || 0, b=box(e);
     return Math.min(v.endsWith('%') ? n/100*b.width : n,Math.min(b.width,b.height)/2);
   };
+  // Frameworks de utilitários declaram sombras transparentes em todo elemento; só conta a que desenha algo.
+  const castsShadow=c=>c.boxShadow!=='none' && c.boxShadow.split(/,(?![^(]*\))/).some(part=>{
+    const color=rgba((/(?:rgba?|hsla?|oklch|oklab|lab|lch|color)\([^)]*\)|#[0-9a-f]+/i.exec(part) || [])[0]);
+    return (!color || color[3]>.02) && (part.replace(/[a-z-]+\([^)]*\)/gi,'').match(/-?[\d.]+px/g) || []).some(n=>parseFloat(n)!==0);
+  });
+  const bordered=c=>parseFloat(c.borderTopWidth)>0 && c.borderTopStyle!=='none' && (rgba(c.borderTopColor)?.[3] ?? 1)>0;
   const surface=e=>{
     const c=computed(e), bg=rgba(c.backgroundColor);
-    return !!(bg && bg[3]) || parseFloat(c.borderTopWidth)>0 || c.boxShadow!=='none';
+    return !!(bg && bg[3]) || bordered(c) || castsShadow(c);
   };
+  // Contêiner sem semântica que pinta uma caixa visível: card, painel, barra. Fundos iguais ao que está atrás não contam.
+  function paintsBox(e) {
+    const b=box(e);
+    if (b.width<48 || b.height<32 || b.width>=innerWidth*.95 && b.height>=innerHeight*.95) return false;
+    const c=computed(e);
+    if (bordered(c) || castsShadow(c) || c.backgroundImage!=='none') return true;
+    const bg=rgba(c.backgroundColor);
+    if (!bg || bg[3]<.05) return false;
+    const behind=up(e) ? backdrop(up(e)) : null;
+    return !behind || hex(over(bg,behind))!==hex(behind);
+  }
+  const CHARTS=[['svg.recharts-surface','Recharts'],['svg.apexcharts-svg','ApexCharts'],['svg.highcharts-root','Highcharts'],['[_echarts_instance_] canvas,[_echarts_instance_] svg','ECharts'],['.js-plotly-plot svg.main-svg','Plotly']];
+  const chartOf=e=>CHARTS.find(([selector])=>e.matches(selector))?.[1] || (e.localName==='canvas' && window.Chart?.getChart?.(e) ? 'Chart.js' : '');
 
   // Ids gerados em tempo de execução (useId do React, Radix, hashes) mudam a cada render e não servem de seletor.
   const stableId=e=>e.id && !/[:«»]|^_|_R_|^radix-|[0-9a-f]{8,}|\d{5,}/.test(e.id);
@@ -543,6 +567,14 @@ function installVisualInspector(options) {
       if (parent && parent.children.length===1 && !parent.textContent.trim() && /flex|grid/.test(computed(parent).display)) groups.push(parent);
     }
     const nodes = [...new Set([...groups, ...controls, ...textParents])].filter(e => !own(e) && shown(e));
+    // Cards e painéis costumam ser div sem semântica: entram os ancestrais do que já foi identificado que pintam uma caixa.
+    const tested = new Set(nodes), surfaces = new Set();
+    for (const e of [...nodes]) for (let a=up(e); a && a!==document.body && a!==document.documentElement && !tested.has(a); a=up(a)) {
+      tested.add(a);
+      const only=a.children.length===1 && tested.has(a.firstElementChild) ? box(a.firstElementChild) : null;
+      if (only && Math.abs(only.width-box(a).width)<=1 && Math.abs(only.height-box(a).height)<=1) continue;
+      if (!own(a) && paintsBox(a) && shown(a)) { surfaces.add(a); nodes.push(a); }
+    }
     const nodeSet = new Set(nodes);
     const components = nodes.map(e => {
       let parent = up(e);
@@ -552,16 +584,26 @@ function installVisualInspector(options) {
       const custom=options.describe?.(e) || {};
       const role=e.getAttribute('role');
       const type=custom.type || ({ NAV:'Navegação', MAIN:'Conteúdo', ASIDE:'Barra lateral', BUTTON:'Botão', A:'Link', SUMMARY:'Ação expansível', LABEL:'Rótulo', P:'Parágrafo', LI:'Item', PRE:'Código', BLOCKQUOTE:'Citação', TABLE:'Tabela', TH:'Célula', TD:'Célula', ARTICLE:'Artigo', H1:'Título', H2:'Título', H3:'Título', INPUT:'Campo', TEXTAREA:'Campo', SELECT:'Seletor', SECTION:'Seção', FORM:'Formulário', DIALOG:'Diálogo', SVG:'Ícone', IMG:'Imagem', VIDEO:'Vídeo', AUDIO:'Áudio', CANVAS:'Canvas', IFRAME:'Frame' }[e.tagName.toUpperCase()] ||
-        { button:'Botão', textbox:'Campo', dialog:'Diálogo', alertdialog:'Diálogo', group:'Grupo', slider:'Slider', progressbar:'Progresso', menuitem:'Item de menu', menuitemradio:'Opção de menu', menuitemcheckbox:'Opção de menu', tab:'Aba', option:'Opção' }[role] || (textParents.has(e) ? 'Texto' : 'Grupo'));
-      const name=custom.name || ['aria-label',...nameAttributes,'alt','title'].map(a=>e.getAttribute(a)).find(Boolean) || (['Botão','Linha','Título','Texto','Link'].includes(type) ? e.textContent.trim().slice(0,64) : type);
-      return { element:e, parent, level, type, name, component:componentName(e) };
+        { button:'Botão', textbox:'Campo', dialog:'Diálogo', alertdialog:'Diálogo', group:'Grupo', slider:'Slider', progressbar:'Progresso', menuitem:'Item de menu', menuitemradio:'Opção de menu', menuitemcheckbox:'Opção de menu', tab:'Aba', option:'Opção' }[role] || (textParents.has(e) ? 'Texto' : surfaces.has(e) ? 'Superfície' : 'Grupo'));
+      const chart=chartOf(e), large=e.localName==='svg' && Math.max(box(e).width,box(e).height)>48;
+      const kind=custom.type || (chart ? 'Gráfico' : large ? 'Imagem vetorial' : type);
+      const name=custom.name || ['aria-label',...nameAttributes,'alt','title'].map(a=>e.getAttribute(a)).find(Boolean) || (['Botão','Linha','Título','Texto','Link'].includes(kind) ? e.textContent.trim().slice(0,64) : surfaces.has(e) && (e.querySelector('h1,h2,h3,h4,h5,h6,[role="heading"]')?.textContent || e.textContent).trim().replace(/\s+/g,' ').slice(0,40) || chart || kind);
+      return { element:e, parent, level, type:kind, name, component:componentName(e) };
     });
+    // Card: superfície com borda, raio ou sombra que agrupa mais de um componente.
+    const children=new Map();
+    for (const c of components) if (c.parent) children.set(c.parent,(children.get(c.parent) || 0)+1);
+    for (const c of components) {
+      if (c.type!=='Superfície' || (children.get(c.element) || 0)<2) continue;
+      const css=computed(c.element);
+      if (bordered(css) || castsShadow(css) || parseFloat(css.borderTopLeftRadius)) c.type='Card';
+    }
     componentMap = new Map(components.map(c => [c.element,c]));
     return { components, textParents };
   }
   function measure() {
     // Uma leitura por elemento em cada snapshot; nunca reaproveitar após edição.
-    geometryCache=new WeakMap();styleCache=new WeakMap();clipCache=new WeakMap();flowRegion=new WeakMap();floatRegion=new WeakMap();hiddenCache=new WeakMap();shownCache=new WeakMap();hitChain=new WeakSet();covered=0;
+    geometryCache=new WeakMap();styleCache=new WeakMap();clipCache=new WeakMap();flowRegion=new WeakMap();floatRegion=new WeakMap();hiddenCache=new WeakMap();backdropCache=new WeakMap();shownCache=new WeakMap();hitChain=new WeakSet();covered=0;
     viewRect={ left:0, right:innerWidth, top:0, bottom:innerHeight };
     collectRoots();
     try { modals=new Set(all(':modal')); topLayers=new Set(all(':modal,:popover-open').filter(e=>!own(e))); } catch { modals=new Set(); topLayers=new Set(); }
@@ -991,6 +1033,8 @@ function installVisualInspector(options) {
     add('Material Icons','ícones',marker('.material-icons,[class*="material-symbols"]'));
     add('Bootstrap Icons','ícones',marker('i.bi'));
     add('GSAP','movimento',global('gsap'),w.gsap?.version);
+    for (const [selector,name] of CHARTS) add(name,'gráficos',marker(selector,'marcação do gráfico'));
+    add('Chart.js','gráficos',w.Chart?.getChart && 'window.Chart',w.Chart?.version);
     return found;
   }
   // Padrões feitos à mão que a plataforma web já oferece; cada um vira uma busca no Modern Web Guidance.
@@ -1063,7 +1107,12 @@ function installVisualInspector(options) {
     canvas.append(e);
   }
   const rectPath = b => `M${round(b.x)} ${round(b.y)}h${round(b.width)}v${round(b.height)}h${-round(b.width)}Z`;
-  const stroke = (d, opacity, dash) => { if (d) element('path', { d, fill:'none', stroke:red, 'stroke-width':1, 'stroke-dasharray':dash || 'none', opacity }); };
+  // Um halo claro sob o traço mantém a guia legível sobre fundos escuros ou saturados.
+  const stroke = (d, opacity, dash) => {
+    if (!d) return;
+    element('path', { d, fill:'none', stroke:'#fff', 'stroke-width':3, 'stroke-dasharray':dash || 'none', opacity:opacity*.45 });
+    element('path', { d, fill:'none', stroke:red, 'stroke-width':1, 'stroke-dasharray':dash || 'none', opacity });
+  };
   const red = '#ef4444';
   const line = (x1, y1, x2, y2, opacity = .65) => element('line', { x1, y1, x2, y2, stroke:red, 'stroke-width':1, opacity });
   function label(x, y, text) {
@@ -1092,7 +1141,9 @@ function installVisualInspector(options) {
       if (Number.isFinite(p.baselineApprox)) baselines+=`M${round(p.bounds.x)} ${round(p.baselineApprox)}H${round(p.bounds.right)}`;
     }
     stroke(m.controls.map(e=>rectPath(box(e))).join(''),.3,'3 3');
-    stroke(m.components.filter(c=>!controls.has(c.element)).map(c=>rectPath(box(c.element))).join(''),.13,'3 3');
+    const framed=c=>/^(Card|Superfície|Gráfico|Imagem vetorial|Canvas|Imagem|Vídeo)$/.test(c.type);
+    stroke(m.components.filter(c=>!controls.has(c.element) && !framed(c)).map(c=>rectPath(box(c.element))).join(''),.13,'3 3');
+    stroke(m.components.filter(c=>!controls.has(c.element) && framed(c)).map(c=>rectPath(box(c.element))).join(''),.34,'6 3');
     stroke(parts,.32);
     stroke(baselines,.32,'2 2');
     stroke(findings.map(f=>findingElement.get(f)).filter(e=>e!==document.documentElement).map(e=>rectPath(box(e))).join(''),.85);

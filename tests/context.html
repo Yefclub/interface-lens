@@ -30,6 +30,10 @@
     <status-pill>Ativo</status-pill>
     <span id="loose">Cor fora dos tokens</span>
   </div>
+  <div id="tinted" style="margin:16px 0;padding:16px;background:#eef1f6"><span>Faixa com fundo próprio</span></div>
+  <div id="plain" style="padding:8px 0;background:var(--background)"><span>Bloco com o mesmo fundo da página</span></div>
+  <svg id="vector" width="120" height="60" viewBox="0 0 120 60" aria-label="Tendência"><path d="M0 50 40 20 80 30 120 5" fill="none" stroke="currentColor"/></svg>
+  <svg class="recharts-surface" width="120" height="60" viewBox="0 0 120 60"><rect x="10" y="20" width="20" height="40"/><rect x="50" y="5" width="20" height="55"/></svg>
   <button id="run">Executar testes</button>
   <p id="result" role="status">Aguardando execução.</p>
 </main>
@@ -87,6 +91,13 @@
     const tech=Object.fromEntries(c.technologies.map(t=>[t.name,t]));
     record('Tecnologias reconhecidas trazem evidência',!!tech.React?.evidence&&tech.Bootstrap?.evidence==='tokens --bs-*',c.technologies);
     record('Tecnologia ausente não é listada',!tech.Vue&&!tech['Tailwind CSS']);
+
+    const parts=VisualInspector.measurements().components, typeOf=label=>parts.find(p=>p.label===label)?.type;
+    record('Contêiner com borda e raio que agrupa componentes é um card',parts.some(p=>p.type==='Card'&&p.width>300),parts.map(p=>p.type+':'+p.label));
+    record('Bloco com fundo próprio é uma superfície',parts.some(p=>p.type==='Superfície'&&p.height>40));
+    record('Bloco com o mesmo fundo da página não vira superfície',parts.filter(p=>p.type==='Superfície').length===1);
+    record('SVG grande não é tratado como ícone',typeOf('Tendência')==='Imagem vetorial');
+    record('Gráfico de biblioteca conhecida é reconhecido',typeOf('Recharts')==='Gráfico'&&tech.Recharts?.category==='gráficos',[parts.map(p=>p.type+':'+p.label),c.technologies]);
 
     const text=c.palette.find(p=>p.hex==='#1f2430'), loose=c.palette.find(p=>p.hex==='#b4005a');
     record('Cor em uso é associada ao token',text?.tokens.includes('--foreground'),c.palette);

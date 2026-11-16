@@ -23,6 +23,16 @@ O runtime não envia dados nem persiste preferências. Os retornos são locais e
 
 Compare `snapshot()` e `diff()` na mesma rota, viewport e posição de rolagem; `viewportChanged` avisa quando não é o caso. A chave de cada componente é seu seletor, então inserir irmãos antes de um elemento sem `id` nem `aria-label` pode trocá-la.
 
+## Componentes
+
+Entram como componentes os elementos semânticos, os controles, os blocos de texto e as mídias. Entram também os contêineres sem semântica que pintam uma caixa visível, porque um card costuma ser só um `div`:
+
+- `Card`: tem borda, raio ou sombra e agrupa mais de um componente. O nome vem do título ou do começo do texto.
+- `Superfície`: pinta um fundo diferente do que está atrás, sem as marcas de card.
+- `Gráfico`: SVG ou canvas de Recharts, ApexCharts, Highcharts, ECharts, Plotly ou Chart.js. Outros gráficos aparecem como `Canvas` ou `Imagem vetorial` (SVG maior que um ícone).
+
+Um contêiner com o mesmo fundo do que está atrás e sem borda nem sombra não é desenhado para ninguém e fica de fora. O conteúdo de um canvas não é inspecionável; só a caixa dele.
+
 ## Modo foco
 
 O inspetor só mede o que a aplicação mostra por cima. Um elemento sai do foco em dois casos:
