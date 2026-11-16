@@ -13,11 +13,18 @@
   #generated::after { content:"Gerado"; }
   .slot { display:grid; place-items:center; width:32px; height:32px; border:1px solid #b9c1cc; }
   #hidden-parent { opacity:0; position:absolute; }
+  #stack { display:flex; flex-direction:column; gap:8px; width:120px; margin:0; padding:0; list-style:none; }
+  #stack li { padding-left:8px; line-height:20px; }
+  #actions { display:flex; align-items:center; gap:8px; }
+  #clip { width:120px; overflow:hidden; white-space:nowrap; }
+  #segment { display:flex; padding:2px; border-radius:10px; background:#e3e7ee; }
+  #segment-item { height:28px; border:0; border-radius:8px; }
+  #small { width:24px; height:24px; padding:0; }
   #result { white-space:pre-wrap; padding:16px; background:#fff; border:1px solid #d7dce3; }
 </style>
 <main>
   <h1>Interface Lens</h1>
-  <p>Esta página contém dados sintéticos. Os testes movem ícone e texto, medem o resultado e restauram cada estado.</p>
+  <p id="intro">Esta página contém dados sintéticos. Os testes provocam um desvio, medem o resultado e restauram cada estado.</p>
   <div class="examples">
     <button id="sample" aria-label="Salvar exemplo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16"/></svg><span>Salvar</span></button>
     <div id="slot" class="slot" role="group" aria-label="Caixa do ícone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 12 4 4L19 6"/></svg></div>
@@ -25,18 +32,33 @@
     <button id="generated" aria-label="Rótulo CSS"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16"/></svg></button>
     <div id="hidden-parent"><button id="hidden" style="width:44px;height:44px" aria-label="Oculto"><svg style="transform:translateY(6px)" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg></button></div>
   </div>
+  <div class="examples">
+    <ul id="stack"><li>Primeiro</li><li>Segundo</li><li>Terceiro</li><li>Quarto</li></ul>
+    <div id="actions"><button class="action">Editar</button><button class="action">Duplicar</button><button class="action">Excluir</button></div>
+    <div id="clip"><span>Nome curto</span></div>
+    <div id="segment"><button id="segment-item">Dia</button></div>
+    <button id="small" aria-label="Fechar exemplo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    <div id="shadow-host"></div>
+  </div>
   <button id="run">Executar testes</button>
   <p id="result" role="status">Aguardando execução.</p>
 </main>
+<script>
+  document.getElementById('shadow-host').attachShadow({mode:'open'}).innerHTML='<button aria-label="Dentro do shadow root" style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid #b9c1cc;border-radius:8px;background:#fff"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16"/></svg></button>';
+</script>
 <script src="../skills/interface-lens/scripts/inspect.js"></script>
 <script>
   window.runVisualTests=async function() {
     const results=[];
-    const sample=document.getElementById('sample'), originalNode=sample;
-    const setup=()=>installVisualInspector({cohorts:[{name:'Escala da fixture',selector:'#pattern',height:32}]});
+    const $=id=>document.getElementById(id);
+    const sample=$('sample'), originalNode=sample;
+    const setup=extra=>installVisualInspector({cohorts:[{name:'Escala da fixture',selector:'#pattern',height:32}],...extra});
     setup();
     const record=(name,condition,detail)=>results.push({name,passed:!!condition,detail});
     const audit=()=>VisualInspector.audit();
+    const found=(rule,test=()=>true)=>audit().findings.some(f=>f.rule===rule&&test(f));
+    const panel=()=>$('visual-inspector-panel').shadowRoot;
+
     record('Estado alinhado sem candidatos',audit().findings.length===0,audit().findings);
     const parts=audit().internals.find(c=>c.selector==='#sample' || c.selector.includes('Salvar exemplo'))?.parts || [];
     record('Texto e ícone internos identificados',parts.some(p=>p.type==='Ícone')&&parts.some(p=>p.type==='Texto'));
@@ -44,30 +66,109 @@
     record('Rótulo CSS com ícone centralizado sem falso alerta',generated?.parts.some(p=>p.type==='Texto CSS')&&!audit().findings.some(f=>f.selector.includes('Rótulo CSS')));
     const icon=sample.querySelector('svg');
     icon.style.transform='translateY(4px)';
-    record('Ícone deslocado detectado',audit().findings.some(f=>f.rule==='icone-texto-y'&&f.deltaPx>=3));
+    record('Ícone deslocado detectado',found('icone-texto-y',f=>f.deltaPx>=3));
     icon.style.transform='';
     const label=sample.querySelector('span');
     label.style.transform='translateY(4px)';
-    record('Texto deslocado detectado',audit().findings.some(f=>f.rule==='icone-texto-y'&&f.deltaPx>=3));
+    record('Texto deslocado detectado',found('icone-texto-y',f=>f.deltaPx>=3));
     label.style.transform='';
     sample.style.transform='translateY(4px)';
-    record('Alvo de clique deslocado na linha detectado',audit().findings.some(f=>f.rule==='componente-linha-y'&&f.deltaPx===4));
+    record('Alvo de clique deslocado na linha detectado',found('componente-linha-y',f=>f.deltaPx===4));
     sample.style.transform='';
     const gridIcon=document.querySelector('#slot svg');
     gridIcon.style.transform='translateX(4px)';
-    record('Ícone deslocado dentro de grid detectado',audit().findings.some(f=>f.rule==='icone-slot-x'&&f.deltaPx===4));
+    record('Ícone deslocado dentro de grid detectado',found('icone-slot-x',f=>f.deltaPx===4));
     gridIcon.style.transform='';
-    document.getElementById('pattern').style.height='24px';
-    record('Violação de altura contratada detectada',audit().findings.some(f=>f.rule==='padrao-height'&&f.deltaPx===8));
-    document.getElementById('pattern').style.height='';
+    $('pattern').style.height='24px';
+    record('Violação de altura contratada detectada',found('padrao-height',f=>f.deltaPx===8));
+    $('pattern').style.height='';
     record('Conteúdo oculto excluído',!VisualInspector.measurements().components.some(c=>c.label==='Oculto'));
+
+    const third=$('stack').children[2];
+    third.style.marginTop='6px';
+    record('Espaço fora do ritmo dos irmãos detectado',found('ritmo-gap',f=>f.deltaPx===6&&f.component==='Terceiro'));
+    third.style.marginTop='';
+    third.style.paddingLeft='14px';
+    record('Recuo diferente dos irmãos detectado',found('borda-inicial',f=>f.deltaPx===6&&f.component==='Terceiro'));
+    third.style.paddingLeft='';
+    const duplicate=$('actions').children[1];
+    duplicate.style.height='26px';
+    record('Altura diferente dos irmãos da linha detectada',found('dimensao-irmaos',f=>f.deltaPx===6&&f.component==='Duplicar'));
+    duplicate.style.height='';
+    const clipped=$('clip').firstElementChild;
+    clipped.textContent='Nome longo que não cabe na largura reservada';
+    record('Texto cortado sem reticências detectado',found('texto-cortado',f=>f.selector==='#clip'));
+    $('clip').style.textOverflow='ellipsis';
+    record('Truncamento com reticências não é acusado',!found('texto-cortado'));
+    $('clip').style.textOverflow='';
+    clipped.textContent='Nome curto';
+    $('intro').style.color='#c5c9d0';
+    record('Contraste insuficiente detectado',found('contraste-texto',f=>f.selector==='#intro'&&f.ratio<4.5));
+    $('intro').style.color='';
+    $('segment-item').style.borderRadius='14px';
+    record('Raio não concêntrico detectado',found('raio-concentrico',f=>f.deltaPx===6));
+    $('segment-item').style.borderRadius='';
+    const small=$('small');
+    small.style.width=small.style.height='16px';
+    record('Alvo pequeno com espaço livre ao redor não é acusado',!found('alvo-minimo'));
+    small.style.marginLeft='-23px';
+    record('Alvo de clique pequeno colado a outro detectado',found('alvo-minimo',f=>f.deltaPx===8));
+    setup({rules:{'alvo-minimo':false}});
+    record('Regra desligada pelo adaptador não acusa',!found('alvo-minimo'));
+    setup();
+    small.style.width=small.style.height=small.style.marginLeft='';
+    small.removeAttribute('aria-label');
+    record('Controle só com ícone sem nome detectado',found('controle-sem-nome',f=>f.selector==='#small'));
+    small.setAttribute('aria-label','Fechar exemplo');
+    document.body.style.background='#101114';
+    record('Tema escuro sem color-scheme detectado',found('esquema-nativo'));
+    document.documentElement.style.colorScheme='dark';
+    record('color-scheme escuro declarado deixa de ser acusado',!found('esquema-nativo'));
+    document.documentElement.style.colorScheme='';
+    document.body.style.background='';
+
+    const shadowIcon=$('shadow-host').shadowRoot.querySelector('svg');
+    shadowIcon.style.transform='translateY(5px)';
+    const inShadow=audit().findings.find(f=>f.rule==='icone-botao-y');
+    record('Desvio dentro de shadow root aberto detectado',inShadow?.deltaPx===5&&inShadow.selector.includes(' >>> '),inShadow);
+    record('Seletor com shadow root localiza o alvo',inShadow&&VisualInspector.select(inShadow.selector)?.width===32);
+    VisualInspector.select(null);
+    shadowIcon.style.transform='';
+    const selectors=audit().internals.map(c=>c.selector).filter(s=>!s.includes(' >>> '));
+    record('Seletores gerados são únicos',new Set(selectors).size===selectors.length&&selectors.every(s=>document.querySelectorAll(s).length===1),selectors);
+
+    const before=VisualInspector.snapshot();
+    sample.style.transform='translateY(4px)';
+    const changed=VisualInspector.diff(before);
+    record('Comparação acusa o que se moveu e o achado introduzido',changed.moved.some(c=>c.key.includes('Salvar exemplo')&&c.dy===4)&&changed.findings.introduced.some(f=>f.rule==='componente-linha-y'),changed);
+    sample.style.transform='';
+    const restored=VisualInspector.diff(before);
+    record('Comparação após restauração não acusa mudança',!restored.moved.length&&!restored.resized.length&&!restored.restyled.length&&!restored.added.length&&!restored.removed.length&&!restored.findings.introduced.length,restored);
+
     record('Restauração sem candidatos residuais',audit().findings.length===0,audit().findings);
+    record('Relatório em texto resume o estado',/Achados \(0\)/.test(VisualInspector.report())&&/Cobertura: \d+ componentes/.test(VisualInspector.report()));
     record('Seleção programática mede o alvo',VisualInspector.select('#sample')?.height===32);
+    VisualInspector.refresh();
+    record('Painel descreve a seleção',/Tamanho/.test(panel().textContent)&&/Salvar exemplo/.test(panel().textContent));
+    VisualInspector.select(null);
+    const moved=VisualInspector.movePanel(40,60);
+    record('Painel vai para a posição pedida',moved.x===40&&moved.y===60,moved);
+    panel().querySelector('.grip').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+    record('Painel se move pelo teclado',$('visual-inspector-panel').getBoundingClientRect().x===56);
+    panel().getElementById('vi-tab-findings').click();
+    VisualInspector.refresh();
+    record('Aba de achados mostra o estado vazio',/Nenhum candidato automático/.test(panel().textContent));
+    panel().querySelector('[aria-expanded]').click();
+    VisualInspector.refresh();
+    record('Painel minimizado mantém só o cabeçalho',getComputedStyle(panel().querySelector('.body')).display==='none'&&/0 achados/.test(panel().textContent));
+    record('Painel pode ser ocultado sem remover as guias',VisualInspector.togglePanel()===false&&getComputedStyle($('visual-inspector-panel')).display==='none'&&!!$('visual-inspector-guides'));
+    setup({panel:false});
+    record('Instalação sem painel mantém a API',getComputedStyle($('visual-inspector-panel')).display==='none'&&audit().findings.length===0);
     VisualInspector.remove();
-    record('DOM original preservado e camada removida',originalNode===document.getElementById('sample')&&!document.getElementById('visual-inspector-guides')&&!document.getElementById('visual-inspector-guide-controls'));
+    record('DOM original preservado e camada removida',originalNode===$('sample')&&!$('visual-inspector-guides')&&!$('visual-inspector-panel'));
     setup();
     window.visualTestResults={passed:results.every(r=>r.passed),results};
-    document.getElementById('result').textContent=results.map(r=>(r.passed?'PASSOU':'FALHOU')+' — '+r.name).join('\n');
+    $('result').textContent=results.map(r=>(r.passed?'PASSOU':'FALHOU')+' — '+r.name).join('\n');
     return window.visualTestResults;
   };
   document.getElementById('run').addEventListener('click',runVisualTests);

@@ -1,0 +1,13 @@
+{
+  "name": "interface-lens",
+  "version": "3.1.0",
+  "private": true,
+  "description": "Skill e inspetor visual para construir e refinar interfaces com evidência",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --check skills/interface-lens/scripts/inspect.js && node tests/run.js"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

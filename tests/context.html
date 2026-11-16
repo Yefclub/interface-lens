@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Interface Lens — contexto do produto</title>
+<style>
+  :root {
+    --background:#ffffff; --foreground:#1f2430; --primary:oklch(0.55 0.2 260); --muted:#6b7280; --border:#d7dce3;
+    --brand:262 83% 58%; --radius:8px; --space-2:8px; --font-sans:Arial,sans-serif; --bs-primary:#0d6efd;
+  }
+  .dark { --background:#0e0f12; --foreground:#f1f2f4; --primary:oklch(0.72 0.15 260); --muted:#a1a6b0; --border:#2b2f38; }
+  [data-theme="contraste"] { --background:#000000; --foreground:#ffffff; --border:#ffffff; }
+  .card { --card-gap:12px; --card-shadow:none; }
+  @media (prefers-color-scheme: dark) { :root { --muted:#9aa0aa; --border:#30343d; } }
+  body { margin:32px; background:var(--background); color:var(--foreground); font:14px/1.5 var(--font-sans); }
+  main { max-width:740px; }
+  h1 { font-size:24px; }
+  .card { display:flex; align-items:center; gap:var(--card-gap); padding:16px; border:1px solid var(--border); border-radius:var(--radius); }
+  button { height:32px; padding:0 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--background); color:inherit; font:inherit; }
+  #loose { color:#b4005a; }
+  #result { white-space:pre-wrap; padding:16px; border:1px solid var(--border); }
+</style>
+<main>
+  <h1>Contexto do produto</h1>
+  <p id="intro">Tokens, temas, componentes e marcadores de tecnologia desta página são sintéticos.</p>
+  <div class="card">
+    <button data-slot="button">Salvar</button>
+    <button data-slot="button">Duplicar</button>
+    <button id="fiber">Publicar</button>
+    <status-pill>Ativo</status-pill>
+    <span id="loose">Cor fora dos tokens</span>
+  </div>
+  <div id="tinted" style="margin:16px 0;padding:16px;background:#eef1f6"><span>Faixa com fundo próprio</span></div>
+  <div id="plain" style="padding:8px 0;background:var(--background)"><span>Bloco com o mesmo fundo da página</span></div>
+  <svg id="vector" width="120" height="60" viewBox="0 0 120 60" aria-label="Tendência"><path d="M0 50 40 20 80 30 120 5" fill="none" stroke="currentColor"/></svg>
+  <svg class="recharts-surface" width="120" height="60" viewBox="0 0 120 60"><rect x="10" y="20" width="20" height="40"/><rect x="50" y="5" width="20" height="55"/></svg>
+  <button id="run">Executar testes</button>
+  <p id="result" role="status">Aguardando execução.</p>
+</main>
+<script>
+  // Simula o que o React anexa ao nó do DOM: o fiber do elemento e o componente que o renderiza.
+  function PublishButton() {}
+  document.getElementById('fiber')['__reactFiber$fixture']={type:'button',return:{type:PublishButton,return:null}};
+</script>
+<script src="../skills/interface-lens/scripts/inspect.js"></script>
+<script>
+  window.runVisualTests=async function() {
+    const results=[];
+    const $=id=>document.getElementById(id);
+    const record=(name,condition,detail)=>results.push({name,passed:!!condition,detail});
+    const context=()=>VisualInspector.context();
+    const color=(c,name)=>c.tokens.colors.find(t=>t.name===name);
+    installVisualInspector();
+
+    let c=context();
+    record('Token de cor hexadecimal lido',color(c,'--background')?.hex==='#ffffff',c.tokens.colors);
+    record('Token em oklch convertido para sRGB',/^#[0-9a-f]{6}$/.test(color(c,'--primary')?.hex||'')&&color(c,'--primary').value.startsWith('oklch'));
+    record('Token em canais hsl reconhecido como cor',color(c,'--brand')?.format==='canais hsl'&&/^#[0-9a-f]{6}$/.test(color(c,'--brand').hex));
+    record('Tokens que não são cor ficam em suas categorias',c.tokens.radius.some(t=>t.name==='--radius')&&c.tokens.spacing.some(t=>t.name==='--space-2')&&c.tokens.typography.some(t=>t.name==='--font-sans')&&!color(c,'--radius'));
+    record('Token que muda por tema é marcado',color(c,'--background').themed===true&&color(c,'--brand').themed===false);
+
+    const dark=c.theme.themes.find(t=>t.selector==='.dark');
+    record('Tema por classe detectado e inativo',dark?.mechanism==='classe'&&dark.active===false&&dark.values['--background']==='#0e0f12',c.theme);
+    record('Tema por atributo detectado',c.theme.themes.some(t=>t.selector==='[data-theme="contraste"]'&&t.mechanism==='atributo'&&t.name==='contraste'));
+    record('Tema por media query detectado',c.theme.themes.some(t=>t.mechanism==='media query'&&t.name==='dark'));
+    record('Escopo de componente não vira tema',!c.theme.themes.some(t=>t.selector==='.card'));
+    record('Aparência clara medida',c.theme.appearance==='light'&&c.theme.active.every(name=>name!=='dark'||c.theme.prefersColorScheme==='dark'));
+
+    document.documentElement.classList.add('dark');
+    c=context();
+    record('Tema ativado é reconhecido na raiz',c.theme.themes.find(t=>t.selector==='.dark').active===true&&c.theme.themes.find(t=>t.selector==='.dark').target==='html'&&c.theme.appearance==='dark',c.theme);
+    record('Tokens refletem o tema ativo',color(c,'--background').hex==='#0e0f12');
+    VisualInspector.refresh();
+    const panel=$('visual-inspector-panel').shadowRoot;
+    panel.getElementById('vi-tab-context').click();
+    VisualInspector.refresh();
+    record('Painel mostra tema e tokens',/Escura/.test(panel.textContent)&&/--background/.test(panel.textContent)&&/dark \(\.dark\)/.test(panel.textContent));
+    document.documentElement.classList.remove('dark');
+    VisualInspector.refresh();
+    record('Painel acompanha a troca de tema',/Clara/.test(panel.textContent));
+
+    localStorage.setItem('theme','dark');
+    record('Persistência do tema encontrada',context().theme.storage.some(s=>s.key==='theme'&&s.value==='dark'));
+    localStorage.removeItem('theme');
+
+    c=context();
+    const names=Object.fromEntries(c.components.names.map(n=>[n.name,n]));
+    record('Componentes por data-slot contados',names.button?.count===2&&names.button.via==='data-slot',c.components);
+    record('Componente React nomeado pelo fiber',names.PublishButton?.via==='React'&&VisualInspector.measurements().components.some(m=>m.label==='Publicar'&&m.component==='PublishButton'));
+    record('Elemento customizado listado',names['<status-pill>']?.count===1);
+    const tech=Object.fromEntries(c.technologies.map(t=>[t.name,t]));
+    record('Tecnologias reconhecidas trazem evidência',!!tech.React?.evidence&&tech.Bootstrap?.evidence==='tokens --bs-*',c.technologies);
+    record('Tecnologia ausente não é listada',!tech.Vue&&!tech['Tailwind CSS']);
+
+    const parts=VisualInspector.measurements().components, typeOf=label=>parts.find(p=>p.label===label)?.type;
+    record('Contêiner com borda e raio que agrupa componentes é um card',parts.some(p=>p.type==='Card'&&p.width>300),parts.map(p=>p.type+':'+p.label));
+    record('Bloco com fundo próprio é uma superfície',parts.some(p=>p.type==='Superfície'&&p.height>40));
+    record('Bloco com o mesmo fundo da página não vira superfície',parts.filter(p=>p.type==='Superfície').length===1);
+    record('SVG grande não é tratado como ícone',typeOf('Tendência')==='Imagem vetorial');
+    record('Gráfico de biblioteca conhecida é reconhecido',typeOf('Recharts')==='Gráfico'&&tech.Recharts?.category==='gráficos',[parts.map(p=>p.type+':'+p.label),c.technologies]);
+
+    const text=c.palette.find(p=>p.hex==='#1f2430'), loose=c.palette.find(p=>p.hex==='#b4005a');
+    record('Cor em uso é associada ao token',text?.tokens.includes('--foreground'),c.palette);
+    record('Cor em uso fora dos tokens é apontada',loose&&loose.tokens.length===0&&loose.text===1);
+    record('Tipografia em uso resumida',c.typography.families[0]?.value==='Arial'&&c.typography.sizes.some(s=>s.value==='14px'));
+
+    const report=VisualInspector.report();
+    record('Relatório em texto traz tema, tokens e componentes',/disponíveis .*dark via classe \.dark/.test(report)&&/--foreground #1f2430/.test(report)&&/sem token: .*#b4005a/.test(report)&&/PublishButton ×1/.test(report),report);
+
+    window.visualTestResults={passed:results.every(r=>r.passed),results};
+    $('result').textContent=results.map(r=>(r.passed?'PASSOU':'FALHOU')+' — '+r.name).join('\n');
+    return window.visualTestResults;
+  };
+  document.getElementById('run').addEventListener('click',runVisualTests);
+</script>
+</html>
