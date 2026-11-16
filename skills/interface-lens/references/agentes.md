@@ -7,15 +7,19 @@ Use o navegador e a sessão que o usuário escolheu. Os nomes de ferramenta abai
 ## Agente com terminal e Playwright
 
 ```js
+const fs = require('node:fs');
 const { chromium } = require('playwright');
+const runtime = fs.readFileSync('/caminho/da/skill/scripts/inspect.js', 'utf8');
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 await page.goto('http://localhost:3000/rota');
-await page.addScriptTag({ path: '/caminho/da/skill/scripts/inspect.js' });
+await page.evaluate(runtime);
 console.log(await page.evaluate(() => VisualInspector.report()));
+await page.evaluate(() => VisualInspector.refresh());
 await page.screenshot({ path: 'com-guias.png' });
-await page.evaluate(() => VisualInspector.togglePanel());
 ```
+
+`page.evaluate(runtime)` passa pelo protocolo do DevTools e não é barrado pela política de segurança de conteúdo da página. `page.addScriptTag` insere uma tag de script e pode ser recusado em páginas com CSP restritivo.
 
 ## MCP de navegador que executa código Playwright
 
@@ -49,6 +53,10 @@ VisualInspector.report();
 
 Uma política de segurança de conteúdo restritiva pode recusar o script. Nesse caso, use um contexto Playwright com `bypassCSP`, o Snippet do DevTools ou o inspector nativo. Encerre o servidor ao terminar.
 
+## Frames
+
+O inspetor só enxerga o documento em que foi injetado. Quando o que interessa está em um frame de mesma origem, como a prévia do Storybook, injete dentro dele: no Playwright, `page.frames()` devolve os frames e `frame.evaluate(runtime)` instala o inspetor naquele documento. `report()` avisa quando há frames de mesma origem sem inspeção.
+
 ## DevTools, sem agente
 
 Em Sources › Snippets, crie um snippet com o conteúdo de `inspect.js` e execute. O painel e a API ficam disponíveis no console.
@@ -66,7 +74,13 @@ Use o inspector nativo, as medidas que o harness oferecer e capturas. As etapas 
 
 ## Capturas
 
+Depois de mudar a página (abrir um modal, trocar o tema, editar o DOM), chame `VisualInspector.refresh()` antes de capturar ou de ler o painel: em páginas pesadas o redesenho automático espera alguns instantes.
+
 O painel aparece nas capturas. Use `VisualInspector.togglePanel()` para ocultá-lo, `VisualInspector.movePanel(x, y)` para tirá-lo da área de interesse ou instale com `installVisualInspector({ panel: false })`. Para a captura limpa, oculte também as guias com `VisualInspector.toggleGuides()`.
+
+## Camadas
+
+Com um modal, um drawer ou um menu aberto, o inspetor mede só essa camada. Abra a camada pelo produto, chame `VisualInspector.report()` e confira a linha `Foco`. Para medir o que ficou atrás, feche a camada ou use `VisualInspector.toggleFocus()`.
 
 ## Temas
 
