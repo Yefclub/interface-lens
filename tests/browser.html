@@ -57,7 +57,6 @@
     const record=(name,condition,detail)=>results.push({name,passed:!!condition,detail});
     const audit=()=>VisualInspector.audit();
     const found=(rule,test=()=>true)=>audit().findings.some(f=>f.rule===rule&&test(f));
-    const frames=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     const panel=()=>$('visual-inspector-panel').shadowRoot;
 
     record('Estado alinhado sem candidatos',audit().findings.length===0,audit().findings);
@@ -111,11 +110,13 @@
     $('segment-item').style.borderRadius='';
     const small=$('small');
     small.style.width=small.style.height='16px';
-    record('Alvo de clique abaixo de 24 px detectado',found('alvo-minimo',f=>f.deltaPx===8));
+    record('Alvo pequeno com espaço livre ao redor não é acusado',!found('alvo-minimo'));
+    small.style.marginLeft='-23px';
+    record('Alvo de clique pequeno colado a outro detectado',found('alvo-minimo',f=>f.deltaPx===8));
     setup({rules:{'alvo-minimo':false}});
     record('Regra desligada pelo adaptador não acusa',!found('alvo-minimo'));
     setup();
-    small.style.width=small.style.height='';
+    small.style.width=small.style.height=small.style.marginLeft='';
     small.removeAttribute('aria-label');
     record('Controle só com ícone sem nome detectado',found('controle-sem-nome',f=>f.selector==='#small'));
     small.setAttribute('aria-label','Fechar exemplo');
@@ -147,7 +148,7 @@
     record('Restauração sem candidatos residuais',audit().findings.length===0,audit().findings);
     record('Relatório em texto resume o estado',/Achados \(0\)/.test(VisualInspector.report())&&/Cobertura: \d+ componentes/.test(VisualInspector.report()));
     record('Seleção programática mede o alvo',VisualInspector.select('#sample')?.height===32);
-    await frames();
+    VisualInspector.refresh();
     record('Painel descreve a seleção',/Tamanho/.test(panel().textContent)&&/Salvar exemplo/.test(panel().textContent));
     VisualInspector.select(null);
     const moved=VisualInspector.movePanel(40,60);
@@ -155,10 +156,10 @@
     panel().querySelector('.grip').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
     record('Painel se move pelo teclado',$('visual-inspector-panel').getBoundingClientRect().x===56);
     panel().getElementById('vi-tab-findings').click();
-    await frames();
+    VisualInspector.refresh();
     record('Aba de achados mostra o estado vazio',/Nenhum candidato automático/.test(panel().textContent));
     panel().querySelector('[aria-expanded]').click();
-    await frames();
+    VisualInspector.refresh();
     record('Painel minimizado mantém só o cabeçalho',getComputedStyle(panel().querySelector('.body')).display==='none'&&/0 achados/.test(panel().textContent));
     record('Painel pode ser ocultado sem remover as guias',VisualInspector.togglePanel()===false&&getComputedStyle($('visual-inspector-panel')).display==='none'&&!!$('visual-inspector-guides'));
     setup({panel:false});

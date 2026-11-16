@@ -1,13 +1,17 @@
 /* Interface Lens: inspetor visual. Execute como Snippet ou injete em qualquer página.
  * Lê DOM, estilos, caixas de texto e ícones; não altera o conteúdo da página.
- * API: VisualInspector.report(), .context(), .audit(), .measurements(), .snapshot(), .diff(),
- *      .select(), .toggleGuides(), .togglePanel(), .movePanel(), .remove().
+ * API: VisualInspector.report(), .context(), .audit(), .measurements(), .snapshot(), .diff(), .refresh(),
+ *      .select(), .toggleFocus(), .toggleGuides(), .togglePanel(), .movePanel(), .remove().
  */
 function installVisualInspector(options) {
   'use strict';
   options = options || {};
+  if (!document.body) {
+    document.addEventListener('DOMContentLoaded',()=>installVisualInspector(options),{ once:true });
+    return null;
+  }
   window.VisualInspector?.remove();
-  const VERSION='3.0.0';
+  const VERSION='3.1.0';
   const style=options.mockStyle || null;
   const hooks=options.selectors || {};
   const nameAttributes=options.nameAttributes || [];
@@ -16,11 +20,16 @@ function installVisualInspector(options) {
   const ACTION='button,a[href],summary,[role="button"],[role="link"],[role="menuitem"],[role="menuitemradio"]';
   const CONTROL=ACTION+',input:not([type="hidden"]),textarea,select,[role="textbox"],[role="checkbox"],[role="switch"],[role="slider"],[role="progressbar"],[role="menuitemcheckbox"],[role="tab"],[role="option"]';
 
+  // As guias também ficam em shadow root: regras da página para svg, text ou rect não as alcançam.
+  const layer=document.createElement('div');
+  layer.id='visual-inspector-guides';
+  layer.setAttribute('aria-hidden','true');
+  layer.style.cssText='all:initial;display:block;position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:2147483000';
   const guides=document.createElementNS(svgNS,'svg');
-  guides.id='visual-inspector-guides';
-  guides.setAttribute('aria-hidden','true');
-  guides.style.cssText='position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2147483000';
-  document.body.append(guides);
+  guides.style.cssText='position:absolute;inset:0;width:100%;height:100%';
+  layer.attachShadow({mode:'open'}).append(guides);
+  // Fora do body: bibliotecas de modal marcam os filhos do body como inertes e a hidratação estranha nós a mais ali.
+  document.documentElement.append(layer);
 
   // O painel vive em shadow root: o CSS da página não o alcança e ele não vaza estilos.
   const host=document.createElement('div');
@@ -45,8 +54,7 @@ function installVisualInspector(options) {
     s.setAttribute('viewBox','0 0 16 16'); s.setAttribute('aria-hidden','true'); p.setAttribute('d',d); s.append(p);
     return s;
   };
-  const sheet=new CSSStyleSheet();
-  sheet.replaceSync(`
+  const css=`
     *,*::before,*::after { box-sizing:border-box; }
     .panel { --bg:#151515; --raised:#232323; --line:rgba(255,255,255,.1); --fg:#f4f4f5; --muted:#a1a1aa; --faint:#8b8b94; --accent:#f87171; --focus:#93c5fd;
       display:flex; flex-direction:column; width:360px; max-width:calc(100vw - 32px); overflow:hidden; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:14px;
@@ -72,8 +80,14 @@ function installVisualInspector(options) {
     .tabs button[aria-selected="true"] { background:var(--raised); color:var(--fg); box-shadow:0 1px 2px rgba(0,0,0,.4); }
     .badge { min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:rgba(248,113,113,.16); color:var(--accent); font-size:11px; line-height:18px; text-align:center; }
     .badge[data-zero] { background:rgba(255,255,255,.07); color:var(--faint); }
-    .body { max-height:min(340px,calc(100vh - 140px)); overflow:auto; padding:4px 12px 12px; overscroll-behavior:contain; scrollbar-width:thin; }
-    .minimized .tabs,.minimized .body { display:none; }
+    /* Altura fixa: o cabeçalho e as abas não mudam de lugar quando o conteúdo muda sob o ponteiro. */
+    .body { display:flex; flex-direction:column; height:min(216px,calc(100vh - 160px)); overflow:auto; padding:4px 12px 12px; overscroll-behavior:contain; scrollbar-width:thin; }
+    .body > * { flex:none; }
+    .blank { margin:auto; max-width:250px; text-align:center; }
+    .focus { display:flex; align-items:center; gap:8px; margin:0 8px 8px; padding:2px 2px 2px 10px; border-radius:10px; background:rgba(96,165,250,.12); color:#bfdbfe; }
+    .focus span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .focus .text { color:inherit; }
+    .focus[hidden],.minimized .tabs,.minimized .focus,.minimized .body { display:none; }
     p { margin:0; }
     .empty { padding:6px 0 2px; color:var(--muted); }
     .hint { padding-top:4px; color:var(--faint); }
@@ -103,7 +117,7 @@ function installVisualInspector(options) {
     .message { grid-column:2 / -1; color:var(--muted); }
     .row { display:flex; justify-content:flex-end; margin-top:12px; }
     @media (prefers-reduced-motion:no-preference) { .icon,.text,.tabs button,.findings button { transition:background-color .12s,color .12s; } }
-  `);
+  `;
   const summary=h('span');
   const grip=h('button',{class:'icon grip',type:'button','aria-label':'Mover painel com as setas do teclado',title:'Arraste para mover; duplo clique reposiciona'},glyph('M6 4h.01M10 4h.01M6 8h.01M10 8h.01M6 12h.01M10 12h.01'));
   const compare=style && h('button',{class:'text',type:'button',text:'Ver original',onclick:()=>toggle()});
@@ -116,20 +130,27 @@ function installVisualInspector(options) {
   const tabButtons=TABS.map(([id,text])=>h('button',{type:'button',role:'tab',id:'vi-tab-'+id,'aria-controls':'vi-body',onclick:()=>setTab(id)},text,id==='findings' && badge));
   const tabs=h('div',{class:'tabs',role:'tablist','aria-label':'Seções do inspetor'},tabButtons);
   const body=h('div',{class:'body',id:'vi-body',role:'tabpanel',tabindex:'0'});
-  const panel=h('section',{class:'panel','aria-label':'Interface Lens'},head,tabs,body);
+  const focusText=h('span'), focusButton=h('button',{class:'text',type:'button',onclick:()=>toggleFocus()});
+  const focusBar=h('div',{class:'focus',hidden:true},focusText,focusButton);
+  const panel=h('section',{class:'panel','aria-label':'Interface Lens'},head,tabs,focusBar,body);
   // Elemento de prova para resolver tokens; a cor sentinela do pai denuncia valores que não são cor.
   const probe=h('i'), SENTINEL='rgb(1, 2, 3)';
-  shadow.adoptedStyleSheets=[sheet];
+  // Folha construída não depende de style-src no CSP da página; <style> fica como reserva.
+  try {
+    const sheet=new CSSStyleSheet();
+    sheet.replaceSync(css);
+    shadow.adoptedStyleSheets=[sheet];
+  } catch { shadow.append(h('style',{text:css})); }
   shadow.append(panel,h('i',{hidden:true,style:'color:'+SENTINEL},probe));
-  document.body.append(host);
+  document.documentElement.append(host);
 
   let geometryCache=new WeakMap(), styleCache=new WeakMap(), roots=[document];
   const up=e=>e.parentElement || (e.parentNode instanceof ShadowRoot ? e.parentNode.host : null);
   const all=s=>roots.flatMap(r=>[...r.querySelectorAll(s)]);
-  const own=e=>e===host || guides.contains(e);
+  const own=e=>e===host || e===layer;
   function collectRoots() {
     roots=[document];
-    for (let i=0; i<roots.length; i++) for (const e of roots[i].querySelectorAll('*')) if (e.shadowRoot && e!==host) roots.push(e.shadowRoot);
+    for (let i=0; i<roots.length; i++) for (const e of roots[i].querySelectorAll('*')) if (e.shadowRoot && !own(e)) roots.push(e.shadowRoot);
   }
   const box = e => {
     if (!geometryCache.has(e)) geometryCache.set(e,e.getBoundingClientRect());
@@ -139,19 +160,173 @@ function installVisualInspector(options) {
     if (!styleCache.has(e)) styleCache.set(e,getComputedStyle(e));
     return styleCache.get(e);
   };
-  const visible = e => {
-    const b = box(e);
-    if (!(b.width > 0 && b.height > 0 && b.right > 0 && b.x < innerWidth && b.bottom > 0 && b.y < innerHeight)) return false;
-    let left = Math.max(0, b.left), right = Math.min(innerWidth, b.right);
-    let top = Math.max(0, b.top), bottom = Math.min(innerHeight, b.bottom);
-    for (let a=e; a; a=up(a)) {
-      const c = computed(a), r = box(a);
-      if (c.visibility === 'hidden' || c.opacity === '0' || c.display === 'none' || c.clipPath === 'inset(50%)' || c.clip === 'rect(0px, 0px, 0px, 0px)') return false;
-      if (a !== e && /auto|scroll|hidden|clip/.test(c.overflowX)) { left=Math.max(left,r.left); right=Math.min(right,r.right); }
-      if (a !== e && /auto|scroll|hidden|clip/.test(c.overflowY)) { top=Math.max(top,r.top); bottom=Math.min(bottom,r.bottom); }
+  let clipCache=new WeakMap(), flowRegion=new WeakMap(), floatRegion=new WeakMap(), hiddenCache=new WeakMap(), viewRect=null;
+  let shownCache=new WeakMap(), hitChain=new WeakSet(), modals=new Set(), topLayers=new Set(), covered=0;
+  // Oculto por si ou por um ancestral. visibility é herdada e um descendante pode revertê-la, então só vale no próprio elemento.
+  function hiddenChain(a) {
+    if (!a) return false;
+    if (!hiddenCache.has(a)) {
+      const c = computed(a);
+      hiddenCache.set(a,c.opacity === '0' || c.display === 'none' || c.clipPath === 'inset(50%)' || c.clip === 'rect(0px, 0px, 0px, 0px)' || hiddenChain(up(a)));
     }
-    return right > left && bottom > top;
+    return hiddenCache.get(a);
+  }
+  // Região em que um descendante de `a` pode aparecer, calculada uma vez por elemento.
+  // Posicionados escapam do overflow: fixed de todos os ancestrais; absolute (floating) dos ancestrais estáticos.
+  // O overflow de html e body vale para a viewport, não para a caixa deles.
+  function region(a, floating) {
+    if (!a) return viewRect;
+    const cache = floating ? floatRegion : flowRegion;
+    if (cache.has(a)) return cache.get(a);
+    const c = computed(a), anchored = c.position !== 'static' || c.transform !== 'none';
+    let out = c.position === 'fixed' ? viewRect : region(up(a),c.position === 'absolute' ? true : anchored ? false : floating);
+    if ((anchored || !floating) && a !== document.body && a !== document.documentElement) {
+      const x = /auto|scroll|hidden|clip/.test(c.overflowX), y = /auto|scroll|hidden|clip/.test(c.overflowY);
+      if (x || y) {
+        const r = box(a);
+        out = { left:x ? Math.max(out.left,r.left) : out.left, right:x ? Math.min(out.right,r.right) : out.right, top:y ? Math.max(out.top,r.top) : out.top, bottom:y ? Math.min(out.bottom,r.bottom) : out.bottom };
+      }
+    }
+    cache.set(a,out);
+    return out;
+  }
+  // Parte do elemento que aparece na viewport depois dos recortes dos ancestrais; null quando nada aparece.
+  function clipRect(e) {
+    if (clipCache.has(e)) return clipCache.get(e);
+    const b = box(e);
+    let out = null;
+    if (b.width > 0 && b.height > 0 && b.right > 0 && b.x < innerWidth && b.bottom > 0 && b.y < innerHeight) {
+      const c = computed(e);
+      if (c.visibility !== 'hidden' && !hiddenChain(e)) {
+        const r = c.position === 'fixed' ? viewRect : region(up(e),c.position === 'absolute');
+        const left = Math.max(r.left,b.left), right = Math.min(r.right,b.right), top = Math.max(r.top,b.top), bottom = Math.min(r.bottom,b.bottom);
+        if (right > left && bottom > top) out = { left, right, top, bottom };
+      }
+    }
+    clipCache.set(e,out);
+    return out;
+  }
+  const visible = e => !!clipRect(e);
+  // Modo foco: só entra na inspeção o que a aplicação está mostrando por cima.
+  let focusOn = options.focus !== false;
+  const within = (inner, outer) => { for (let n=inner; n; n=up(n)) if (n===outer) return true; return false; };
+  // Uma camada alheia tira o elemento do foco quando pinta algo sobre ele: fundo, imagem ou desfoque.
+  // Sobreposições transparentes, como o pseudo-elemento de um card clicável, não escondem nada.
+  function blocks(n, x, y) {
+    if (modals.has(n)) return true;
+    const b = box(n);
+    if (x < b.left || x > b.right || y < b.top || y > b.bottom) return false;
+    if (/^(img|video|canvas|iframe|picture)$/.test(n.localName)) return true;
+    const c = computed(n), bg = rgba(c.backgroundColor);
+    return !!(bg && bg[3] >= .1) || c.backgroundImage !== 'none' || (c.backdropFilter || 'none') !== 'none';
+  }
+  // Sobe de `from` até o filho de um ancestral comum (`stop`) e devolve esse ramo com o z-index que vale para ele:
+  // o do posicionado mais externo no caminho, já que ancestrais estáticos não criam contexto de empilhamento.
+  function climb(from, stop) {
+    let z = -.5;
+    for (let a=from; a; a=up(a)) {
+      const c = computed(a);
+      if (c.position !== 'static') z = c.zIndex === 'auto' ? 0 : parseInt(c.zIndex) || 0;
+      if (stop(up(a))) return { branch:a, common:up(a), z };
+    }
+    return null;
+  }
+  // Ordem de pintura aproximada entre ramos irmãos: top layer, depois z-index dos posicionados, depois ordem no documento.
+  // Só é usada onde o teste de ponto não alcança: elementos com pointer-events: none e modais declarados.
+  function above(n, e) {
+    for (let a=n; a; a=up(a)) if (topLayers.has(a)) return !within(e,a);
+    const chain = new Set();
+    for (let a=e; a; a=up(a)) chain.add(a);
+    const top = climb(n,a=>chain.has(a));
+    if (!top) return true;
+    const base = climb(e,a=>a===top.common);
+    return top.z !== base.z ? top.z > base.z : !!(base.branch.compareDocumentPosition(top.branch) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }
+  // Vizinho estático do mesmo fluxo e sem fundo não é uma camada sobre o alvo: é conteúdo que invade a caixa.
+  function sameFlow(hit, e) {
+    for (let a=hit; a; a=up(a)) {
+      if (within(e,a)) return true;
+      if (computed(a).position !== 'static') return false;
+    }
+    return false;
+  }
+  const POINTS = [[.5,.5],[.15,.2],[.85,.8],[.15,.8],[.85,.2]];
+  const topAt = (root, x, y) => {
+    const hit = root.elementFromPoint(x,y);
+    return hit && own(hit) ? root.elementsFromPoint(x,y).find(n=>!own(n)) || null : hit;
   };
+  // Modal declarado (<dialog> modal, aria-modal ou alertdialog) que está por cima: a aplicação diz o que quer mostrar,
+  // mesmo sem pano de fundo pintado. modalChain guarda, para cada ancestral do modal, o ramo que leva até ele.
+  let modalRoot=null, modalChain=new Map();
+  function findModal() {
+    modalRoot=null; modalChain=new Map();
+    if (!focusOn) return;
+    let list=[];
+    try { list=all(':modal,[aria-modal="true"],[role="alertdialog"]'); } catch { list=all('[aria-modal="true"],[role="alertdialog"]'); }
+    modalRoot=list.reverse().find(d=>{
+      const c=!own(d) && clipRect(d);
+      return c && POINTS.some(([fx,fy])=>{ const hit=topAt(d.getRootNode(),c.left+(c.right-c.left)*fx,c.top+(c.bottom-c.top)*fy); return hit && within(hit,d); });
+    }) || null;
+    let z=-.5;
+    for (let a=modalRoot; a && up(a); a=up(a)) {
+      const c=computed(a);
+      if (c.position!=='static') z=c.zIndex==='auto' ? 0 : parseInt(c.zIndex) || 0;
+      modalChain.set(up(a),{ branch:a, z });
+    }
+  }
+  // Fora do modal declarado: nem dentro dele, nem em uma camada que pinta por cima (menu ou seletor aberto a partir dele).
+  function outsideModal(e) {
+    if (!modalRoot || within(e,modalRoot)) return false;
+    for (let a=e; a; a=up(a)) if (topLayers.has(a) && a!==modalRoot) return false;
+    if (modals.has(modalRoot)) return true;
+    const mine=climb(e,a=>modalChain.has(a));
+    if (!mine) return true;
+    const modal=modalChain.get(mine.common);
+    if (mine.branch===modal.branch) return true;
+    return mine.z!==modal.z ? mine.z<modal.z : !(modal.branch.compareDocumentPosition(mine.branch) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }
+  function shown(e) {
+    if (shownCache.has(e)) return shownCache.get(e);
+    const c = clipRect(e);
+    let out = !!c;
+    if (c && focusOn && outsideModal(e)) { out = false; covered++; }
+    // Um teste de ponto que acerta um descendante já prova o ancestral: hitChain evita repetir o teste.
+    else if (c && focusOn && !hitChain.has(e)) {
+      const root = e.getRootNode(), style = computed(e), passive = style.pointerEvents === 'none';
+      // Texto em linha que quebra tem a caixa envolvente maior que o desenho; o primeiro fragmento é o ponto seguro.
+      const first = style.display === 'inline' ? e.getClientRects()[0] : null;
+      const left = first ? Math.max(c.left,first.left) : c.left, right = first ? Math.min(c.right,first.right) : c.right;
+      const top = first ? Math.max(c.top,first.top) : c.top, bottom = first ? Math.min(c.bottom,first.bottom) : c.bottom;
+      // Uma camada que cobre o elemento inteiro decide no primeiro ponto; não é preciso testar os outros.
+      let sealed = false;
+      const hides = (n,x,y) => {
+        if (!blocks(n,x,y) || passive && !above(n,e)) return false;
+        const b = box(n);
+        sealed = modals.has(n) || b.left <= c.left && b.right >= c.right && b.top <= c.top && b.bottom >= c.bottom;
+        return true;
+      };
+      out = right <= left || bottom <= top || POINTS.some(([fx,fy]) => {
+        if (sealed) return false;
+        const x = left+(right-left)*fx, y = top+(bottom-top)*fy, hit = root.elementFromPoint(x,y);
+        if (!hit) return true;
+        if (!own(hit)) {
+          if (within(hit,e)) { for (let a=hit; a && !hitChain.has(a); a=up(a)) hitChain.add(a); return true; }
+          if (within(e,hit)) return true;
+          if (hides(hit,x,y)) return false;
+          if (sameFlow(hit,e)) return true;
+        }
+        for (const n of root.elementsFromPoint(x,y)) {
+          if (own(n)) continue;
+          if (within(n,e) || within(e,n)) return true;
+          if (hides(n,x,y)) return false;
+        }
+        return true;
+      });
+      if (!out) covered++;
+    }
+    shownCache.set(e,out);
+    return out;
+  }
   const centerX = e => box(e).x + box(e).width / 2;
   const centerY = e => box(e).y + box(e).height / 2;
   const spread = v => v.length ? Math.max(...v) - Math.min(...v) : 0;
@@ -168,7 +343,12 @@ function installVisualInspector(options) {
     if (colorCache.has(value)) return colorCache.get(value);
     let out=null;
     const m=/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/.exec(value || '');
+    const hx=/^#([0-9a-f]{3,8})$/i.exec(value || '');
     if (m) out=[+m[1],+m[2],+m[3],m[4]===undefined ? 1 : m[4].endsWith('%') ? parseFloat(m[4])/100 : +m[4]];
+    else if (hx && hx[1].length!==5 && hx[1].length!==7) {
+      const d=hx[1].length<5 ? [...hx[1]].map(ch=>ch+ch).join('') : hx[1];
+      out=[0,2,4].map(i=>parseInt(d.slice(i,i+2),16)).concat(d.length===8 ? parseInt(d.slice(6),16)/255 : 1);
+    }
     else if (value && CSS.supports('color',value)) {
       colorContext.clearRect(0,0,1,1); colorContext.fillStyle=value; colorContext.fillRect(0,0,1,1);
       const d=colorContext.getImageData(0,0,1,1).data;
@@ -210,6 +390,8 @@ function installVisualInspector(options) {
     return !!(bg && bg[3]) || parseFloat(c.borderTopWidth)>0 || c.boxShadow!=='none';
   };
 
+  // Ids gerados em tempo de execução (useId do React, Radix, hashes) mudam a cada render e não servem de seletor.
+  const stableId=e=>e.id && !/[:«»]|^_|_R_|^radix-|[0-9a-f]{8,}|\d{5,}/.test(e.id);
   // Seletor único no seu root; elementos em shadow root usam "host >>> interno".
   function selector(e) {
     const root=e.getRootNode(), tag=e.localName;
@@ -217,13 +399,13 @@ function installVisualInspector(options) {
     const scope=hooks.scope && e.closest(hooks.scope) ? hooks.scope+' ' : '';
     const candidates=[];
     for (const a of ['aria-label','data-testid',...nameAttributes]) if (e.getAttribute(a)) candidates.push(scope+tag+'['+a+'='+JSON.stringify(e.getAttribute(a))+']');
-    if (e.id && !e.id.includes(':')) candidates.push('#'+CSS.escape(e.id));
+    if (stableId(e)) candidates.push('#'+CSS.escape(e.id));
     if (e.classList.length) candidates.push(scope+tag+[...e.classList].slice(0,2).map(c=>'.'+CSS.escape(c)).join(''));
     let found=candidates.find(unique);
     if (!found) {
       const path=[];
       for (let a=e; a; a=a.parentElement) {
-        if (a.id && !a.id.includes(':') && unique('#'+CSS.escape(a.id))) { path.unshift('#'+CSS.escape(a.id)); break; }
+        if (stableId(a) && unique('#'+CSS.escape(a.id))) { path.unshift('#'+CSS.escape(a.id)); break; }
         const same=[...(a.parentNode?.children || [a])].filter(c=>c.localName===a.localName);
         path.unshift(a.localName+(same.length>1 ? ':nth-of-type('+(same.indexOf(a)+1)+')' : ''));
         if (unique(path.join(' > '))) break;
@@ -241,17 +423,15 @@ function installVisualInspector(options) {
     }
     return e;
   }
+  let lastFont='';
   function fontMetrics(text, css) {
-    textContext.font = `${css.fontStyle} ${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;
+    const font = `${css.fontStyle} ${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;
+    if (font !== lastFont) textContext.font = lastFont = font;
     return textContext.measureText(text);
   }
   function clipText(rect, parent) {
-    let left=rect.x, right=rect.right, top=rect.y, bottom=rect.bottom;
-    for (let a=parent; a; a=up(a)) {
-      const css=computed(a), r=box(a);
-      if (/auto|scroll|hidden|clip/.test(css.overflowX)) { left=Math.max(left,r.left); right=Math.min(right,r.right); }
-      if (/auto|scroll|hidden|clip/.test(css.overflowY)) { top=Math.max(top,r.top); bottom=Math.min(bottom,r.bottom); }
-    }
+    const r=region(parent,false);
+    const left=Math.max(r.left,rect.x), right=Math.min(r.right,rect.right), top=Math.max(r.top,rect.y), bottom=Math.min(r.bottom,rect.bottom);
     return { x:left, y:top, width:Math.max(0,right-left), height:Math.max(0,bottom-top), right, bottom };
   }
   function partsFor(control, content=false) {
@@ -263,7 +443,7 @@ function installVisualInspector(options) {
     const walker = document.createTreeWalker(control, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const node=walker.currentNode, parent=node.parentElement, text=node.textContent.trim();
-      if (!text || !parent || (!content && owner(parent)!==control) || parent.closest('.sr-only,[aria-hidden="true"]') || !visible(parent)) continue;
+      if (!text || !parent || (!content && owner(parent)!==control) || parent.closest('.sr-only') || !visible(parent)) continue;
       const range=document.createRange(); range.selectNodeContents(node);
       const css=computed(parent), metrics=fontMetrics(text,css);
       for (const rect of range.getClientRects()) {
@@ -302,7 +482,11 @@ function installVisualInspector(options) {
 
   // Nome do componente de framework cujo elemento raiz é este nó, quando o runtime o expõe.
   // Nomes de até dois caracteres vêm de builds minificados e não identificam nada.
-  const GENERIC=/^(.{1,2}$|Primitive\.|Slot|SlotClone|Fragment|Suspense|ForwardRef|Memo|Anonymous|Presence|Portal|_c\d*$)|(Provider|Context|Consumer)$/;
+  const GENERIC=/^(.{1,2}$|Primitive\.|Styled\(|styled\.|Slot|SlotClone|Fragment|Suspense|ForwardRef|Memo|Anonymous|Presence|Portal|_c\d*$)|(Provider|Context|Consumer)$/;
+  const cleanName=name=>{
+    name=(name || '').replace(/^(?:ForwardRef|Memo|WithStyles|Observer|Connect)\((.+)\)$/,'$1');
+    return !name || GENERIC.test(name) || name.length===3 && !/^([A-Z][a-z]{2}|[A-Z]{3})$/.test(name) ? '' : name;
+  };
   const seen={react:false,vue:false};
   function componentName(e) {
     const key=Object.keys(e).find(k=>k.startsWith('__reactFiber$'));
@@ -311,8 +495,8 @@ function installVisualInspector(options) {
       const owners=[];
       let source;
       for (let f=e[key]?.return; f && typeof f.type!=='string' && owners.length<4; f=f.return) {
-        const t=f.type, name=typeof t==='function' ? t.displayName || t.name : t && typeof t==='object' ? t.displayName || t.render?.displayName || t.render?.name || t.type?.displayName || t.type?.name : '';
-        if (!name || GENERIC.test(name)) continue;
+        const t=f.type, name=cleanName(typeof t==='function' ? t.displayName || t.name : t && typeof t==='object' ? t.displayName || t.render?.displayName || t.render?.name || t.type?.displayName || t.type?.name : '');
+        if (!name) continue;
         owners.push(name);
         if (!source && f._debugSource) source=f._debugSource.fileName.split(/[\\/]/).slice(-3).join('/')+':'+f._debugSource.lineNumber;
       }
@@ -337,6 +521,9 @@ function installVisualInspector(options) {
     return null;
   }
 
+  // Conteúdo distribuído por <slot> não é descendente do controle no shadow root, mas é o que ele mostra.
+  const slotted=e=>[...e.querySelectorAll('slot')].flatMap(slot=>slot.assignedNodes({ flatten:true })).filter(n=>n.nodeType===1 || n.textContent.trim());
+  const labelOf=e=>e.getAttribute('aria-label') || (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id=>id && e.getRootNode().getElementById?.(id)?.textContent.trim()).filter(Boolean).join(' ') || e.querySelector('h1,h2,h3,[role="heading"]')?.textContent.trim() || '';
   let componentMap = new Map();
   let hovered = null;
   let pinned = null;
@@ -346,16 +533,16 @@ function installVisualInspector(options) {
       const walker=document.createTreeWalker(root===document ? document.body : root,NodeFilter.SHOW_TEXT);
       while (walker.nextNode()) {
         const p=walker.currentNode.parentElement;
-        if (!p || p.children.length || own(p) || p.closest('script,style,noscript,svg,.sr-only,[aria-hidden="true"]')) continue;
-        if (walker.currentNode.textContent.trim() && visible(p)) textParents.add(p);
+        if (!p || p.children.length || own(p) || p.closest('script,style,noscript,svg,.sr-only')) continue;
+        if (walker.currentNode.textContent.trim() && shown(p)) textParents.add(p);
       }
     }
-    const groups = all('nav,main,aside,section,header,footer,form,label,p,li,pre,blockquote,table,th,td,article,[role="article"],[role="dialog"],[role="group"],h1,h2,h3,video,audio,canvas,iframe,svg,img'+(hooks.components ? ','+hooks.components : ''));
+    const groups = all('nav,main,aside,section,header,footer,form,label,p,li,pre,blockquote,table,th,td,article,[role="article"],dialog,[role="dialog"],[role="alertdialog"],[role="group"],h1,h2,h3,video,audio,canvas,iframe,svg,img'+(hooks.components ? ','+hooks.components : ''));
     for (const icon of groups.filter(e=>e.matches('svg,img'))) {
       const parent=icon.parentElement;
       if (parent && parent.children.length===1 && !parent.textContent.trim() && /flex|grid/.test(computed(parent).display)) groups.push(parent);
     }
-    const nodes = [...new Set([...groups, ...controls, ...textParents])].filter(e => !own(e) && visible(e));
+    const nodes = [...new Set([...groups, ...controls, ...textParents])].filter(e => !own(e) && shown(e));
     const nodeSet = new Set(nodes);
     const components = nodes.map(e => {
       let parent = up(e);
@@ -364,8 +551,8 @@ function installVisualInspector(options) {
       for (let a=parent; a; a=up(a)) if (nodeSet.has(a)) level++;
       const custom=options.describe?.(e) || {};
       const role=e.getAttribute('role');
-      const type=custom.type || ({ NAV:'Navegação', MAIN:'Conteúdo', ASIDE:'Barra lateral', BUTTON:'Botão', A:'Link', SUMMARY:'Ação expansível', LABEL:'Rótulo', P:'Parágrafo', LI:'Item', PRE:'Código', BLOCKQUOTE:'Citação', TABLE:'Tabela', TH:'Célula', TD:'Célula', ARTICLE:'Artigo', H1:'Título', H2:'Título', H3:'Título', INPUT:'Campo', TEXTAREA:'Campo', SELECT:'Seletor', SECTION:'Seção', FORM:'Formulário', SVG:'Ícone', IMG:'Imagem', VIDEO:'Vídeo', AUDIO:'Áudio', CANVAS:'Canvas', IFRAME:'Frame' }[e.tagName.toUpperCase()] ||
-        { button:'Botão', textbox:'Campo', dialog:'Diálogo', group:'Grupo', slider:'Slider', progressbar:'Progresso', menuitem:'Item de menu', menuitemradio:'Opção de menu', menuitemcheckbox:'Opção de menu', tab:'Aba', option:'Opção' }[role] || (textParents.has(e) ? 'Texto' : 'Grupo'));
+      const type=custom.type || ({ NAV:'Navegação', MAIN:'Conteúdo', ASIDE:'Barra lateral', BUTTON:'Botão', A:'Link', SUMMARY:'Ação expansível', LABEL:'Rótulo', P:'Parágrafo', LI:'Item', PRE:'Código', BLOCKQUOTE:'Citação', TABLE:'Tabela', TH:'Célula', TD:'Célula', ARTICLE:'Artigo', H1:'Título', H2:'Título', H3:'Título', INPUT:'Campo', TEXTAREA:'Campo', SELECT:'Seletor', SECTION:'Seção', FORM:'Formulário', DIALOG:'Diálogo', SVG:'Ícone', IMG:'Imagem', VIDEO:'Vídeo', AUDIO:'Áudio', CANVAS:'Canvas', IFRAME:'Frame' }[e.tagName.toUpperCase()] ||
+        { button:'Botão', textbox:'Campo', dialog:'Diálogo', alertdialog:'Diálogo', group:'Grupo', slider:'Slider', progressbar:'Progresso', menuitem:'Item de menu', menuitemradio:'Opção de menu', menuitemcheckbox:'Opção de menu', tab:'Aba', option:'Opção' }[role] || (textParents.has(e) ? 'Texto' : 'Grupo'));
       const name=custom.name || ['aria-label',...nameAttributes,'alt','title'].map(a=>e.getAttribute(a)).find(Boolean) || (['Botão','Linha','Título','Texto','Link'].includes(type) ? e.textContent.trim().slice(0,64) : type);
       return { element:e, parent, level, type, name, component:componentName(e) };
     });
@@ -374,8 +561,11 @@ function installVisualInspector(options) {
   }
   function measure() {
     // Uma leitura por elemento em cada snapshot; nunca reaproveitar após edição.
-    geometryCache=new WeakMap();styleCache=new WeakMap();
+    geometryCache=new WeakMap();styleCache=new WeakMap();clipCache=new WeakMap();flowRegion=new WeakMap();floatRegion=new WeakMap();hiddenCache=new WeakMap();shownCache=new WeakMap();hitChain=new WeakSet();covered=0;
+    viewRect={ left:0, right:innerWidth, top:0, bottom:innerHeight };
     collectRoots();
+    try { modals=new Set(all(':modal')); topLayers=new Set(all(':modal,:popover-open').filter(e=>!own(e))); } catch { modals=new Set(); topLayers=new Set(); }
+    findModal();
     const sidebar=query(hooks.sidebar);
     const composer=query(hooks.composer);
     const main=query(hooks.main || 'main');
@@ -383,7 +573,7 @@ function installVisualInspector(options) {
     const labels=rows.map(row=>options.labelForRow ? options.labelForRow(row) : hooks.label ? row.querySelector(hooks.label) : null).filter(Boolean);
     const toolbarRoot=options.toolbarRoot?.(composer) || query(hooks.toolbar);
     const toolbar=toolbarRoot ? [...toolbarRoot.querySelectorAll('button')].filter(e=>visible(e) && box(e).y>=box(toolbarRoot).y-1 && box(e).bottom<=box(toolbarRoot).bottom+1) : [];
-    const controls = all(CONTROL).filter(e => !own(e) && visible(e));
+    const controls = all(CONTROL).filter(e => !own(e) && shown(e));
     const sidebarActions = sidebar && hooks.actions ? [...sidebar.querySelectorAll(hooks.actions)].filter(visible) : [];
     const { components, textParents } = identify(controls);
     const internals = controls.filter(e=>e.matches(ACTION)).map(e=>({ element:e, parts:partsFor(e) }));
@@ -394,7 +584,20 @@ function installVisualInspector(options) {
       if (!labelLevels.has(level)) labelLevels.set(level,[]);
       labelLevels.get(level).push(box(e).x);
     }
+    // Camada em foco: o diálogo visível mais ao fim do documento, quando ele cobre o que está atrás.
+    let dialog=null;
+    try { dialog=modalRoot || all('[role="dialog"]').filter(e=>!own(e) && shown(e)).at(-1) || null; } catch {}
+    const modal=!!dialog && dialog===modalRoot;
+    // Um banner com role="dialog" não é a camada em foco: ou o diálogo se declara modal, ou cobre boa parte da tela.
+    const focus={ on:focusOn, covered, layer:dialog && covered && (modal || covered>=8 && covered>=components.length/3) ? { selector:selector(dialog), name:labelOf(dialog).slice(0,64), modal } : null };
+    const frames=all('iframe').filter(e=>{ try { return visible(e) && e.contentDocument?.body?.childElementCount>0; } catch { return false; } }).length;
+    // Canvas de aplicação é o que recebe o ponteiro na maior parte da própria área; o decorativo fica atrás do conteúdo.
+    const canvas=all('canvas').some(e=>{
+      const c=clipRect(e);
+      return c && (c.right-c.left)*(c.bottom-c.top)>innerWidth*innerHeight*.5 && POINTS.filter(([fx,fy])=>e.getRootNode().elementFromPoint(c.left+(c.right-c.left)*fx,c.top+(c.bottom-c.top)*fy)===e).length>=3;
+    });
     return {
+      focus, frames, canvas,
       sidebar, composer, main, rows, labels, toolbar, controls, sidebarActions, components, internals, textParents,
       textDelta: Math.max(0,...[...labelLevels.values()].map(spread)),
       toolbarDelta: spread(toolbar.map(centerY)),
@@ -468,9 +671,11 @@ function installVisualInspector(options) {
       if (!e.matches(ACTION)) continue;
       const texts=parts.filter(p=>p.type.startsWith('Texto')), icons=parts.filter(p=>p.type==='Ícone');
       const css=computed(e);
-      if (!parts.length) continue;
+      if (!parts.length || slotted(e).length) continue;
       const ys=parts.map(p=>midY(p.bounds));
-      if (texts.length===1 && icons.length && /center/.test(css.alignItems)) {
+      // Ícone empilhado acima ou abaixo do texto é uma coluna, não um par a alinhar pelo centro.
+      const stacked=texts.length===1 && icons.some(i=>i.bounds.bottom<=texts[0].bounds.y || i.bounds.y>=texts[0].bounds.bottom);
+      if (texts.length===1 && icons.length && !stacked && /center/.test(css.alignItems)) {
         add('icone-texto-y',e,spread(ys),'Centro da caixa de texto e dos ícones difere; conferir alinhamento óptico.','candidato');
       }
       if (icons.length===1 && !texts.length && /center/.test(css.alignItems)) {
@@ -544,7 +749,7 @@ function installVisualInspector(options) {
     }
     for (const e of m.controls) {
       if (!e.matches(ACTION)) continue;
-      if (!e.textContent.trim() && !['aria-label','aria-labelledby','title'].some(a=>e.getAttribute(a)) && !e.querySelector('img[alt]:not([alt=""]),svg title')) {
+      if (!e.textContent.trim() && !slotted(e).some(n=>n.textContent.trim() || n.nodeType===1 && n.matches('[aria-label],[title],img[alt]:not([alt=""])')) && !['aria-label','aria-labelledby','title'].some(a=>e.getAttribute(a)) && !e.querySelector('[aria-label],[title],img[alt]:not([alt=""]),svg title')) {
         flag('controle-sem-nome',e,null,'Controle sem texto nem nome acessível (aria-label, aria-labelledby ou title).','medido');
       }
       if (computed(e).display==='inline') continue;
@@ -553,7 +758,15 @@ function installVisualInspector(options) {
         return c.content!=='none' && c.position==='absolute' && parseFloat(c.width)>=24 && parseFloat(c.height)>=24;
       });
       const b=box(e);
-      if (!expanded) add('alvo-minimo',e,24-Math.min(b.width,b.height),`Alvo de clique de ${round(b.width)}×${round(b.height)} px; o mínimo recomendado é 24×24 px (WCAG 2.2, 2.5.8).`,'candidato');
+      if (expanded || Math.min(b.width,b.height)>=24) continue;
+      // Exceção de espaçamento do critério: um alvo pequeno passa quando o círculo de 24 px no seu centro não toca outro alvo.
+      const cx=b.x+b.width/2, cy=b.y+b.height/2;
+      const crowded=m.controls.some(o=>{
+        if (o===e || within(o,e) || within(e,o)) return false;
+        const r=box(o), dx=Math.max(r.left-cx,0,cx-r.right), dy=Math.max(r.top-cy,0,cy-r.bottom);
+        return dx*dx+dy*dy<144;
+      });
+      if (crowded) add('alvo-minimo',e,24-Math.min(b.width,b.height),`Alvo de clique de ${round(b.width)}×${round(b.height)} px colado a outro alvo; o mínimo recomendado é 24×24 px ou espaço livre ao redor (WCAG 2.2, 2.5.8).`,'candidato');
     }
     const page=backdrop(document.body);
     if (page && luminance(page)<.18 && !/dark/.test(computed(document.documentElement).colorScheme)) {
@@ -561,7 +774,7 @@ function installVisualInspector(options) {
     }
     for (const cohort of options.cohorts || []) {
       for (const e of document.querySelectorAll(cohort.selector)) {
-        if (!visible(e)) continue;
+        if (!shown(e)) continue;
         for (const dimension of ['width','height']) {
           const expected=cohort[dimension];
           if (Number.isFinite(expected) && expected>0) add('padrao-'+dimension,e,Math.abs(box(e)[dimension]-expected),`${cohort.name || 'Grupo'}: ${dimension} deve medir ${expected} px conforme o padrão informado.`,'requisito');
@@ -572,30 +785,34 @@ function installVisualInspector(options) {
   }
 
   // Contexto do produto: folhas de estilo, tokens, temas, tecnologias e componentes.
+  let scanCache=null;
   function scanStyles() {
-    const defs=new Map(), layers=new Set(), properties=new Set();
-    let sheets=0, blocked=0;
-    const define=(name,selector,condition,value)=>(defs.get(name) || defs.set(name,[]).get(name)).push({ selector, condition, value });
-    const walk=(rules,condition)=>{
-      for (const rule of rules) {
-        const type=rule.constructor.name;
-        if (type==='CSSPropertyRule') { properties.add(rule.name); continue; }
-        if (type==='CSSLayerBlockRule' && rule.name) layers.add(rule.name);
-        if (type==='CSSLayerStatementRule') for (const name of rule.nameList) layers.add(name);
-        if (type==='CSSImportRule') {
-          try { if (rule.styleSheet) walk(rule.styleSheet.cssRules,condition); } catch { blocked++; }
-          continue;
+    // Percorrer folhas grandes custa caro; o resultado vale enquanto a contagem de regras de cada folha não mudar.
+    const sheets=roots.flatMap(root=>[...root.styleSheets,...(root.adoptedStyleSheets || [])]);
+    const signature=sheets.map(sheet=>{ try { return sheet.cssRules.length; } catch { return 'x'; } }).join(',');
+    if (scanCache?.signature!==signature) {
+      const defs=new Map(), layers=new Set(), properties=new Set();
+      let blocked=0;
+      const walk=(rules,condition)=>{
+        for (const rule of rules) {
+          const type=rule.constructor.name;
+          if (type==='CSSPropertyRule') { properties.add(rule.name); continue; }
+          if (type==='CSSLayerBlockRule' && rule.name) layers.add(rule.name);
+          if (type==='CSSLayerStatementRule') for (const name of rule.nameList) layers.add(name);
+          if (type==='CSSImportRule') {
+            try { if (rule.styleSheet) walk(rule.styleSheet.cssRules,condition); } catch { blocked++; }
+            continue;
+          }
+          if (rule.style && rule.selectorText) for (const name of rule.style) if (name.startsWith('--')) (defs.get(name) || defs.set(name,[]).get(name)).push({ selector:rule.selectorText, condition, value:rule.style.getPropertyValue(name).trim() });
+          if (rule.cssRules?.length) walk(rule.cssRules,rule.conditionText && /Media|Container|Supports/.test(type) ? (condition+' '+rule.conditionText).trim() : condition);
         }
-        if (rule.style && rule.selectorText) for (const name of rule.style) if (name.startsWith('--')) define(name,rule.selectorText,condition,rule.style.getPropertyValue(name).trim());
-        if (rule.cssRules?.length) walk(rule.cssRules,rule.conditionText && /Media|Container|Supports/.test(type) ? (condition+' '+rule.conditionText).trim() : condition);
-      }
-    };
-    for (const root of roots) for (const sheet of [...root.styleSheets,...(root.adoptedStyleSheets || [])]) {
-      sheets++;
-      try { walk(sheet.cssRules,''); } catch { blocked++; }
+      };
+      for (const sheet of sheets) { try { walk(sheet.cssRules,''); } catch { blocked++; } }
+      scanCache={ signature, defs, layers, properties, sheets:sheets.length, blocked };
     }
-    for (const [e,name] of [[document.documentElement,':root'],[document.body,'body']]) for (const property of e.style) if (property.startsWith('--')) define(property,name,'',e.style.getPropertyValue(property).trim());
-    return { defs, layers, properties, sheets, blocked };
+    const defs=new Map(scanCache.defs);
+    for (const [e,selector] of [[document.documentElement,':root'],[document.body,'body']]) for (const name of e.style) if (name.startsWith('--')) defs.set(name,[...(defs.get(name) || []),{ selector, condition:'', value:e.style.getPropertyValue(name).trim() }]);
+    return { ...scanCache, defs };
   }
   const splitSelectors=text=>{
     const parts=[];
@@ -622,6 +839,7 @@ function installVisualInspector(options) {
     else if (/^\d{1,3}[ ,]+\d{1,3}[ ,]+\d{1,3}$/.test(value) && COLOR_NAME.test(name)) { css=`rgb(${value})`; format='canais rgb'; }
     else if (!CSS.supports('color',value)) return null;
     // O elemento de prova resolve var(), light-dark() e color-mix() no esquema de cor da página.
+    if (!/var\(|light-dark\(|color-mix\(|currentcolor|calc\(|from /i.test(css)) { const direct=rgba(css); return direct && { hex:hex(direct), format }; }
     probe.style.colorScheme=getComputedStyle(document.documentElement).colorScheme;
     probe.style.color='';
     probe.style.color=css;
@@ -633,13 +851,18 @@ function installVisualInspector(options) {
   function readTokens(scan, used) {
     const bodyStyle=getComputedStyle(document.body);
     const out={ total:0, colors:[], radius:[], spacing:[], typography:[], shadow:[], motion:[], other:0, omitted:0, stylesheets:{ read:scan.sheets-scan.blocked, blocked:scan.blocked } };
-    const index=new Map(), colors=[];
+    const index=new Map(), colors=[], holders=new Map();
+    const holderOf=selector=>{
+      if (!holders.has(selector)) { let e=null; try { e=document.querySelector(selector); } catch {} holders.set(selector,e); }
+      return holders.get(selector);
+    };
     for (const [name,defs] of scan.defs) {
       if (name.startsWith('--tw-')) continue;
       out.total++;
       let value=bodyStyle.getPropertyValue(name).trim();
-      for (const d of value ? [] : defs) {
-        try { value=getComputedStyle(document.querySelector(d.selector)).getPropertyValue(name).trim(); } catch {}
+      for (const d of value ? [] : defs.slice(0,3)) {
+        const holder=holderOf(d.selector);
+        if (holder) value=getComputedStyle(holder).getPropertyValue(name).trim();
         if (value) break;
       }
       value ||= defs[0].value;
@@ -677,19 +900,21 @@ function installVisualInspector(options) {
     const values=map=>Object.fromEntries([...map].slice(0,40));
     // Um tema é um seletor simples, com nome de tema, que redefine cores da raiz ou de outro tema.
     // Os demais são escopos de componente; os ativos só em um elemento interno ficam em `local`.
-    const named=[...scopes].filter(([key])=>/^(?:\.[\w-]+|\[[^\]]+\])$/.test(key) && /dark|light|theme|mode|scheme|contrast/i.test(key));
+    const themeWord=key=>key.replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z]+/).some(word=>/^(dark|light|themes?|mode|scheme|contrast|night|dim)$/.test(word));
+    const named=[...scopes].filter(([key])=>/^(?:\.[\w-]+|\[[^\]]+\])$/.test(key) && themeWord(key));
     const themes=[], local=[];
     for (const [key,map] of named) {
-      if ([...map].filter(([n,value])=>(base.has(n) || named.some(([other,tokens])=>other!==key && tokens.has(n))) && tokenColor(n,value)).length<2) continue;
+      const attribute=/^\[([\w-]+)/.exec(key)?.[1];
+      if ([...map].filter(([n,value])=>(base.has(n) || attribute && named.some(([other,tokens])=>other!==key && other.startsWith('['+attribute) && tokens.has(n))) && tokenColor(n,value)).length<2) continue;
       let target=null, active=false;
       try {
         const e=[document.documentElement,document.body].find(el=>el.matches(key)) || document.querySelector(key);
         active=!!e;
-        const attribute=/^\[([\w-]+)/.exec(key)?.[1], holder=e || (attribute && document.querySelector('['+attribute+']'));
+        const holder=e || (attribute && document.querySelector('['+attribute+']'));
         if (holder) target=holder===document.documentElement ? 'html' : holder===document.body ? 'body' : selector(holder);
       } catch {}
       const value=/=["']?([^"'\]]+)/.exec(key)?.[1];
-      (active && target!=='html' && target!=='body' ? local : themes).push({ name:value || key.replace(/^\./,''), selector:key, mechanism:key.startsWith('.') ? 'classe' : 'atributo', target, active, tokens:map.size, values:values(map) });
+      (active && target!=='html' && target!=='body' ? local : themes).push({ name:value || key.replace(/^[.\[]|\]$/g,''), selector:key, mechanism:key.startsWith('.') ? 'classe' : 'atributo', target, active, tokens:map.size, values:values(map) });
     }
     for (const [scheme,map] of media) themes.push({ name:scheme, selector:`@media (prefers-color-scheme: ${scheme})`, mechanism:'media query', target:'sistema', active:matchMedia(`(prefers-color-scheme: ${scheme})`).matches, tokens:map.size, values:values(map) });
     const storage=[];
@@ -723,7 +948,7 @@ function installVisualInspector(options) {
     const expando=prefix=>containers.some(e=>Object.keys(e).some(k=>k.startsWith(prefix)));
     const add=(name,category,evidence,version)=>{ if (evidence) found.push({ name, category, version:version ? String(version) : undefined, evidence }); };
     add('React','framework',(seen.react || expando('__reactContainer$') || expando('__reactFiber$')) && 'fibers nos nós do DOM',[...(w.__REACT_DEVTOOLS_GLOBAL_HOOK__?.renderers?.values?.() || [])][0]?.version);
-    add('Next.js','framework',global('__NEXT_DATA__') || global('__next_f') || (w.next?.version && 'window.next') || marker('#__next'),w.next?.version);
+    add('Next.js','framework',global('__NEXT_DATA__') || global('__next_f') || marker('#__next'),/^(9|\d\d)\./.test(w.next?.version || '') ? w.next.version : undefined);
     add('React Router / Remix','framework',global('__reactRouterContext') || global('__remixContext'));
     add('Gatsby','framework',marker('#___gatsby'));
     add('Vue','framework',(seen.vue || expando('__vue_app__') || has('[data-v-app]')) && 'aplicação montada no DOM',containers.find(e=>e.__vue_app__)?.__vue_app__.version || w.Vue?.version);
@@ -734,6 +959,7 @@ function installVisualInspector(options) {
     add('Solid','framework',global('_$HY') || marker('[data-hk]'));
     add('Astro','framework',marker('astro-island'));
     add('Qwik','framework',marker('[q\\:container]'));
+    add('Flutter Web','framework',marker('flutter-view,flt-glass-pane'));
     add('Lit','framework',global('litElementVersions'),w.litElementVersions?.[0]);
     add('Alpine.js','framework',global('Alpine') || marker('[x-data]'),w.Alpine?.version);
     add('htmx','framework',global('htmx') || marker('[hx-get],[hx-post],[hx-boost]','atributos hx-*'),w.htmx?.version);
@@ -742,11 +968,13 @@ function installVisualInspector(options) {
     const generator=document.querySelector('meta[name="generator"]')?.content;
     add(generator,'gerador',generator && 'meta generator');
     add('Tailwind CSS','estilo',token('--tw-'),scan.layers.has('theme') && scan.layers.has('utilities') ? '4' : undefined);
-    for (const [prefix,name] of Object.entries({ '--bs-':'Bootstrap', '--chakra-':'Chakra UI', '--mantine-':'Mantine', '--mui-':'MUI', '--ant-':'Ant Design', '--el-':'Element Plus', '--v-theme-':'Vuetify', '--ion-':'Ionic', '--sl-':'Shoelace', '--cds-':'Carbon', '--spectrum-':'Spectrum', '--md-sys-':'Material Web', '--bulma-':'Bulma' })) add(name,'estilo',token(prefix));
+    for (const [prefix,name] of Object.entries({ '--bs-':'Bootstrap', '--cui-':'CoreUI', '--chakra-':'Chakra UI', '--mantine-':'Mantine', '--mui-':'MUI', '--ant-':'Ant Design', '--el-':'Element Plus', '--v-theme-':'Vuetify', '--ion-':'Ionic', '--sl-':'Shoelace', '--cds-':'Carbon', '--spectrum-':'Spectrum', '--md-sys-':'Material Web', '--bulma-':'Bulma' })) add(name,'estilo',token(prefix));
     const named=n=>found.some(f=>f.name===n);
     if (!named('MUI')) add('MUI','estilo',marker('[class*="Mui"]','classes Mui*'));
     if (!named('Ant Design')) add('Ant Design','estilo',marker('[class^="ant-"],[class*=" ant-"]','classes ant-*'));
     if (!named('Vuetify')) add('Vuetify','estilo',marker('.v-application'));
+    add('Quasar','componentes',marker('.q-layout,.q-btn','classes q-*'));
+    add('PrimeReact / PrimeVue','componentes',marker('.p-component','classes p-*'));
     const radix=marker('[data-radix-collection-item],[data-radix-popper-content-wrapper],[data-radix-scroll-area-viewport],[id^="radix-"]','atributos data-radix-*');
     add('Radix Primitives','componentes',radix);
     add('Radix Themes','componentes',marker('.radix-themes'));
@@ -764,6 +992,19 @@ function installVisualInspector(options) {
     add('Bootstrap Icons','ícones',marker('i.bi'));
     add('GSAP','movimento',global('gsap'),w.gsap?.version);
     return found;
+  }
+  // Padrões feitos à mão que a plataforma web já oferece; cada um vira uma busca no Modern Web Guidance.
+  function platformHints(theme) {
+    const hints=[];
+    const add=(pattern,selector,query)=>{
+      let count=0;
+      try { count=selector===true ? 1 : all(selector).filter(e=>!own(e)).length; } catch {}
+      if (count) hints.push({ pattern, count, query });
+    };
+    add('diálogo sem o elemento <dialog>','[role="dialog"]:not(dialog),[role="alertdialog"]:not(dialog),[aria-modal="true"]:not(dialog)','modal dialog element');
+    add('menu, lista ou dica flutuante sem a Popover API','[role="menu"]:not([popover]),[role="listbox"]:not([popover]),[role="tooltip"]:not([popover])','popover API anchor positioning');
+    if (theme.themes.length && theme.colorScheme==='normal' && !theme.usesLightDark) add('tema alternado sem color-scheme nem light-dark()',true,'dark mode light-dark color-scheme');
+    return hints;
   }
   function inventory(m) {
     const names=new Map();
@@ -806,16 +1047,23 @@ function installVisualInspector(options) {
   function context(m=measure()) {
     const scan=scanStyles(), { used, palette, typography, radii }=usage(m), { tokens, index }=readTokens(scan,used);
     for (const color of palette) color.tokens=(index.get(color.hex) || []).slice(0,3);
-    const data={ version:VERSION, route:location.pathname, viewport:{ width:innerWidth, height:innerHeight, dpr:devicePixelRatio }, technologies:technologies(scan), theme:readTheme(scan), tokens, palette, typography, radii, components:inventory(m) };
+    const theme=readTheme(scan);
+    const data={ version:VERSION, route:location.pathname, viewport:{ width:innerWidth, height:innerHeight, dpr:devicePixelRatio }, focus:m.focus, technologies:technologies(scan), theme, tokens, palette, typography, radii, components:inventory(m), platform:platformHints(theme) };
     return { data, index };
   }
 
+  // A base (todos os contornos) só muda quando a página muda; a seleção é redesenhada a cada movimento do ponteiro.
+  const baseGroup=document.createElementNS(svgNS,'g'), selectionGroup=document.createElementNS(svgNS,'g');
+  guides.append(baseGroup,selectionGroup);
+  let canvas=baseGroup;
   function element(tag, attrs, text) {
     const e = document.createElementNS(svgNS, tag);
     for (const [key, value] of Object.entries(attrs)) e.setAttribute(key, String(value));
     if (text !== undefined) e.textContent = text;
-    guides.append(e);
+    canvas.append(e);
   }
+  const rectPath = b => `M${round(b.x)} ${round(b.y)}h${round(b.width)}v${round(b.height)}h${-round(b.width)}Z`;
+  const stroke = (d, opacity, dash) => { if (d) element('path', { d, fill:'none', stroke:red, 'stroke-width':1, 'stroke-dasharray':dash || 'none', opacity }); };
   const red = '#ef4444';
   const line = (x1, y1, x2, y2, opacity = .65) => element('line', { x1, y1, x2, y2, stroke:red, 'stroke-width':1, opacity });
   function label(x, y, text) {
@@ -834,11 +1082,20 @@ function installVisualInspector(options) {
     }
   }
   function paint(m, findings) {
+    canvas=baseGroup;
     guides.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
-    m.controls.forEach(e => outline(e));
-    m.components.filter(c => !m.controls.includes(c.element)).forEach(c => outline(c.element, .13));
-    m.internals.forEach(c=>c.parts.forEach(p=>drawPart(p)));
-    for (const f of findings) if (findingElement.get(f)!==document.documentElement) outline(findingElement.get(f), .85, true);
+    // Um path por estilo: desenhar um nó por contorno custa mais que medir a página inteira.
+    const controls=new Set(m.controls);
+    let parts='', baselines='';
+    for (const c of m.internals) for (const p of c.parts) {
+      parts+=rectPath(p.bounds);
+      if (Number.isFinite(p.baselineApprox)) baselines+=`M${round(p.bounds.x)} ${round(p.baselineApprox)}H${round(p.bounds.right)}`;
+    }
+    stroke(m.controls.map(e=>rectPath(box(e))).join(''),.3,'3 3');
+    stroke(m.components.filter(c=>!controls.has(c.element)).map(c=>rectPath(box(c.element))).join(''),.13,'3 3');
+    stroke(parts,.32);
+    stroke(baselines,.32,'2 2');
+    stroke(findings.map(f=>findingElement.get(f)).filter(e=>e!==document.documentElement).map(e=>rectPath(box(e))).join(''),.85);
     if (m.sidebar) {
       const b = box(m.sidebar);
       line(b.x, 0, b.x, innerHeight, .35);
@@ -880,6 +1137,9 @@ function installVisualInspector(options) {
         label(b.right+12, y+4, `Botões ${round(box(m.toolbar[0]).height)} px | Δ ${round(m.toolbarDelta)} px`);
       }
     }
+  }
+  function paintSelection(m) {
+    canvas=selectionGroup;
     const selected = componentMap.get(hovered);
     if (!selected) return;
     outline(selected.element, 1);
@@ -901,10 +1161,10 @@ function installVisualInspector(options) {
   const swatch=color=>h('span',{class:'sw',style:'background:'+color});
   function inspectView(m) {
     const c=componentMap.get(hovered);
-    if (!c) return { key:['empty',m.components.length], build:()=>[
+    if (!c) return { key:['empty',m.components.length], build:()=>[h('div',{class:'blank'},
       h('p',{class:'empty',text:'Passe o ponteiro sobre a página para inspecionar um componente.'}),
       h('p',{class:'hint',text:`${m.components.length} componentes em níveis N0–N${Math.max(0,...m.components.map(x=>x.level))}.`})
-    ] };
+    )] };
     const e=c.element, b=box(e), css=computed(e), rows=[], path=[];
     for (let p=c; p; p=componentMap.get(p.parent)) path.unshift(`N${p.level} ${p.type}`);
     const named=key=>key+(pageContext().index.get(key)?.length ? ' · '+pageContext().index.get(key)[0] : '');
@@ -933,11 +1193,11 @@ function installVisualInspector(options) {
     ] };
   }
   function findingsView(findings) {
-    if (!findings.length) return { key:['none'], build:()=>[h('p',{class:'empty',text:'Nenhum candidato automático. A composição ainda exige inspeção visual.'})] };
+    if (!findings.length) return { key:['none'], build:()=>[h('div',{class:'blank'},h('p',{class:'empty',text:'Nenhum candidato automático. A composição ainda exige inspeção visual.'}))] };
     return { key:[findings.map(f=>[f.rule,f.selector,f.deltaPx,f.message]),findings.map(f=>findingElement.get(f)===pinned)], build:()=>[
       h('ul',{class:'findings'},findings.map(f=>{
         const target=findingElement.get(f), current=target===pinned;
-        return h('li',null,h('button',{type:'button','aria-current':String(current),title:f.selector,onclick:()=>{ pinned=current ? null : target; hovered=pinned; schedule(); }},
+        return h('li',null,h('button',{type:'button','aria-current':String(current),title:f.selector,onclick:()=>{ pinned=current ? null : target; hovered=pinned; touch(); }},
           h('span',{class:'dot','data-kind':f.confidence}),
           h('span',{class:'name',text:f.component || f.selector}),
           h('span',{class:'delta',text:f.deltaPx===null ? '' : f.deltaPx+' px'}),
@@ -974,6 +1234,10 @@ function installVisualInspector(options) {
     summary.textContent=minimized ? `${findings.length} ${findings.length===1 ? 'achado' : 'achados'}` : '';
     badge.textContent=findings.length;
     badge.toggleAttribute('data-zero',!findings.length);
+    focusBar.hidden=focusOn && !m.focus.layer;
+    focusText.textContent=focusOn ? `Em foco: ${m.focus.layer?.name || 'diálogo'} · ${m.focus.covered} fora` : 'Foco desligado';
+    focusText.title=focusOn ? `${m.focus.covered} elementos cobertos por esta camada ficaram fora da inspeção` : 'Tudo o que é visível entra na inspeção, inclusive o que está coberto';
+    focusButton.textContent=focusOn ? 'Ver tudo' : 'Focar';
     if (minimized) return;
     const view=tab==='inspect' ? inspectView(m) : tab==='findings' ? findingsView(findings) : contextView();
     const key=tab+JSON.stringify(view.key);
@@ -991,7 +1255,7 @@ function installVisualInspector(options) {
     });
     body.setAttribute('aria-labelledby','vi-tab-'+id);
     bodyKey='';
-    if (last) render();
+    if (last) touch(true);
   }
   function setMinimized(value) {
     minimized=value;
@@ -1008,30 +1272,51 @@ function installVisualInspector(options) {
     host.style.top=Math.max(pad,Math.min(innerHeight-b.height-pad,y))+'px';
     if (user) userPlaced=true;
   }
-  // Sem posição escolhida pelo usuário, o painel procura o canto que menos cobre controles e conteúdo.
+  // Sem posição escolhida pelo usuário, o painel fica no canto que menos cobre controles e conteúdo.
+  // O canto é uma âncora: o painel cresce a partir dele e só troca quando o ganho é claro, para não pular enquanto a página rola.
+  let anchor='br';
   function dockPanel(m) {
     const b=host.getBoundingClientRect(), pad=16;
     if (userPlaced) return place(b.x,b.y);
-    const right=innerWidth-b.width-pad, bottom=innerHeight-b.height-pad;
-    const middle=Math.max(pad,(innerHeight-b.height)/2);
-    const candidates=[{x:b.x,y:b.y},{x:right,y:bottom},{x:right,y:pad},{x:right,y:middle},{x:pad,y:middle}].map(c=>({x:Math.max(pad,Math.min(right,c.x)),y:Math.max(pad,Math.min(bottom,c.y))}));
+    const right=innerWidth-b.width-pad, bottom=innerHeight-b.height-pad, middle=Math.max(pad,(innerHeight-b.height)/2);
+    const spots={ br:[right,bottom], tr:[right,pad], mr:[right,middle], ml:[pad,middle] };
     const obstacles=[...m.controls.map(e=>({rect:box(e),weight:4})),...m.components.filter(c=>c.element.matches('p,h1,h2,h3,img,table,pre')).map(c=>({rect:box(c.element),weight:1}))];
-    const score=c=>obstacles.reduce((sum,o)=>sum+Math.max(0,Math.min(c.x+b.width,o.rect.right)-Math.max(c.x,o.rect.x))*Math.max(0,Math.min(c.y+b.height,o.rect.bottom)-Math.max(c.y,o.rect.y))*o.weight,0);
-    candidates.sort((a,b)=>score(a)-score(b));
-    place(candidates[0].x,candidates[0].y);
+    const score=([x,y])=>obstacles.reduce((sum,o)=>sum+Math.max(0,Math.min(x+b.width,o.rect.right)-Math.max(x,o.rect.x))*Math.max(0,Math.min(y+b.height,o.rect.bottom)-Math.max(y,o.rect.y))*o.weight,0);
+    const best=Object.keys(spots).reduce((a,k)=>score(spots[k])<score(spots[a]) ? k : a,anchor);
+    if (score(spots[best])<score(spots[anchor])-b.width*b.height/2) anchor=best;
+    place(...spots[anchor]);
   }
-  head.addEventListener('pointerdown',e=>{
-    if (e.button!==0 || e.target.closest('button:not(.grip)')) return;
+  function startDrag(e) {
     const b=host.getBoundingClientRect();
     drag={ x:e.clientX-b.x, y:e.clientY-b.y };
-    head.setPointerCapture(e.pointerId);
     panel.classList.add('dragging');
-  });
-  head.addEventListener('pointermove',e=>{ if (drag) place(e.clientX-drag.x,e.clientY-drag.y,true); });
+  }
+  const moveDrag=e=>{ if (drag) place(e.clientX-drag.x,e.clientY-drag.y,true); };
   const endDrag=()=>{ drag=null; panel.classList.remove('dragging'); };
-  head.addEventListener('pointerup',endDrag);
-  head.addEventListener('pointercancel',endDrag);
-  head.addEventListener('dblclick',e=>{ if (!e.target.closest('button:not(.grip)')) { userPlaced=false; schedule(); } });
+  // O ponteiro sobre o painel é tratado na janela, antes da aplicação, e encaminhado pela geometria.
+  // Assim um clique no inspetor não fecha o menu ou o modal em inspeção (detecção de clique fora), e o painel
+  // continua utilizável quando um <dialog> modal nativo o torna inerte.
+  function routed(e) {
+    if (!panelOn) return;
+    const point=e.changedTouches?.[0] || e;
+    const inside=r=>r.width>0 && point.clientX>=r.left && point.clientX<=r.right && point.clientY>=r.top && point.clientY<=r.bottom;
+    if (!inside(host.getBoundingClientRect())) return;
+    e.stopImmediatePropagation();
+    if (!e.composedPath().includes(host)) e.preventDefault();
+    const button=[...shadow.querySelectorAll('button')].find(x=>inside(x.getBoundingClientRect()));
+    const onHead=inside(head.getBoundingClientRect()) && (!button || button===grip);
+    if (e.type==='click') button?.dispatchEvent(new MouseEvent('click'));
+    else if (e.type==='pointerdown' && e.button===0 && onHead) startDrag(e);
+    else if (e.type==='pointerup') endDrag();
+    else if (e.type==='dblclick' && onHead) { userPlaced=false; schedule(); }
+  }
+  const ROUTED=['pointerdown','mousedown','pointerup','mouseup','click','dblclick','touchstart','touchend'];
+  for (const type of ROUTED) window.addEventListener(type,routed,true);
+  window.addEventListener('pointermove',moveDrag,true);
+  window.addEventListener('pointerup',endDrag,true);
+  window.addEventListener('pointercancel',endDrag,true);
+  // Teclas usadas no painel não devem acionar atalhos da aplicação.
+  for (const type of ['keydown','keyup','keypress']) host.addEventListener(type,e=>e.stopPropagation());
   grip.addEventListener('keydown',e=>{
     const step=e.shiftKey ? 64 : 16, move={ ArrowLeft:[-step,0], ArrowRight:[step,0], ArrowUp:[0,-step], ArrowDown:[0,step] }[e.key];
     if (!move) return;
@@ -1048,22 +1333,65 @@ function installVisualInspector(options) {
 
   let guidesOn = true;
   let frame = 0;
-  function draw() {
+  // Guias e painel entram na top layer como popovers manuais e voltam ao topo quando a aplicação abre
+  // um diálogo modal ou outro popover depois deles.
+  const overlays=[layer,host];
+  let topLayer=null;
+  function promote() {
+    if (!layer.showPopover) return;
+    try {
+      const now=all(':modal,:popover-open').filter(e=>!own(e));
+      if (topLayer && now.length===topLayer.length && now.every((e,i)=>e===topLayer[i])) return;
+      topLayer=now;
+    } catch { return; }
+    for (const e of overlays) {
+      try { e.hidePopover(); } catch {}
+      try { e.showPopover(); } catch {}
+    }
+  }
+  if (layer.showPopover) for (const e of overlays) e.setAttribute('popover','manual');
+  // Bibliotecas de modal marcam os irmãos do diálogo como inertes; o painel precisa continuar utilizável.
+  const guard=new MutationObserver(()=>{ for (const a of ['inert','aria-hidden']) if (host.hasAttribute(a)) host.removeAttribute(a); });
+  guard.observe(host,{ attributes:true, attributeFilter:['inert','aria-hidden'] });
+  let cost=0, timer=0, touchFrame=0;
+  function draw(force) {
     frame = 0;
-    if (!guidesOn && !panelOn) return;
+    if (!force && !guidesOn && !panelOn) return;
+    const started = performance.now();
     const m = measure(), findings = inspectRules(m);
     last = { m, findings };
-    guides.replaceChildren();
+    promote();
+    baseGroup.replaceChildren();
     if (guidesOn) paint(m, findings);
+    touch(true);
+    cost = performance.now()-started;
+  }
+  // Mudança só de seleção ou de aba: redesenha a seleção e o painel sobre a última medição.
+  function touch(now) {
+    if (now!==true) { if (!touchFrame) touchFrame=requestAnimationFrame(()=>touch(true)); return; }
+    cancelAnimationFrame(touchFrame); touchFrame=0;
+    if (!last) return schedule();
+    selectionGroup.replaceChildren();
+    if (guidesOn) paintSelection(last.m);
     if (!panelOn) return;
     if (sheetCount!==document.styleSheets.length) { sheetCount=document.styleSheets.length; contextCache=null; }
     render();
-    dockPanel(m);
+    dockPanel(last.m);
   }
-  function schedule() { if (!frame && (guidesOn || panelOn)) frame = requestAnimationFrame(draw); }
+  // Em páginas pesadas ou que mudam a todo instante, o próximo desenho espera na proporção do custo do anterior.
+  function schedule() {
+    if (frame || timer || !(guidesOn || panelOn)) return;
+    if (cost<=12) { frame=requestAnimationFrame(()=>draw()); return; }
+    timer=setTimeout(()=>{ timer=0; frame=requestAnimationFrame(()=>draw()); },Math.min(600,cost*4));
+  }
+  function toggleFocus() {
+    focusOn=!focusOn;
+    schedule();
+    return focusOn;
+  }
   function toggleGuides() {
     guidesOn = !guidesOn;
-    guides.style.display = guidesOn ? '' : 'none';
+    layer.style.display = guidesOn ? 'block' : 'none';
     eye.setAttribute('aria-pressed', String(guidesOn));
     schedule();
     return guidesOn;
@@ -1088,26 +1416,36 @@ function installVisualInspector(options) {
     if (e && own(e)) return; // Sobre o painel, a seleção atual permanece legível.
     if (e?.shadowRoot) e = event.composedPath().find(n=>n instanceof Element) || e;
     while (e && !componentMap.has(e)) e = up(e);
-    if (hovered !== e) { hovered=e; schedule(); }
+    if (hovered !== e) { hovered=e; touch(); }
   }
   window.addEventListener('resize', schedule);
   document.addEventListener('scroll', schedule, true);
   document.addEventListener('transitionend', schedule, true);
   document.addEventListener('pointerover', inspect, true);
   const resizeObserver = new ResizeObserver(schedule);
-  resizeObserver.observe(host);
+  // Quando o conteúdo do painel muda de tamanho, ele se reancora no mesmo quadro, sem medir a página de novo.
+  const panelObserver = new ResizeObserver(()=>{ if (last && panelOn) dockPanel(last.m); });
+  panelObserver.observe(host);
   for (const e of document.querySelectorAll(hooks.observe || 'main,aside,nav')) resizeObserver.observe(e);
   const mutationObserver = new MutationObserver(records=>{
     if (records.some(r=>!own(r.target))) schedule();
   });
-  mutationObserver.observe(document.body, { childList:true, subtree:true,attributes:true,attributeFilter:['style','class','hidden','aria-expanded','aria-selected'] });
+  mutationObserver.observe(document.body, { childList:true, subtree:true,attributes:true,attributeFilter:['style','class','hidden','open','inert','aria-hidden','aria-modal','aria-expanded','aria-selected','data-state'] });
+  document.addEventListener('toggle', schedule, true);
   // Trocas de tema acontecem em atributos de html e body.
   const themeObserver = new MutationObserver(()=>{ contextCache=null; bodyKey=''; schedule(); });
   for (const e of [document.documentElement,document.body]) themeObserver.observe(e,{ attributes:true });
 
   const rect=e=>{ const b=box(e); return { x:round(b.x), y:round(b.y), width:round(b.width), height:round(b.height) }; };
   const api = {
-    version: VERSION, toggle, toggleGuides, togglePanel,
+    version: VERSION, toggle, toggleGuides, togglePanel, toggleFocus,
+    // Redesenha agora, sem esperar o próximo quadro: use depois de mudar a página e antes de uma captura.
+    refresh() {
+      cancelAnimationFrame(frame); clearTimeout(timer); frame=timer=0;
+      contextCache=null;
+      draw(true);
+      return { components:last.m.components.length, findings:last.findings.length, covered:last.m.focus.covered };
+    },
     movePanel(x, y) {
       userPlaced=x!==undefined;
       if (userPlaced) place(x,y,true); else schedule();
@@ -1116,12 +1454,12 @@ function installVisualInspector(options) {
     select(path) {
       pinned=path ? find(path) : null;
       hovered=pinned;
-      schedule();
+      touch();
       return pinned ? bounds(pinned.getBoundingClientRect()) : null;
     },
     audit() {
       const m=measure();
-      return { status:'heuristic',coverage:{controls:m.controls.length,components:m.components.length,internalParts:m.internals.reduce((n,c)=>n+c.parts.length,0),shadowRoots:roots.length-1},tolerancePx:options.tolerancePx ?? 1, findings:inspectRules(m), typography:'Range mede caixas de texto; baseline e caixa de glifo são estimativas de TextMetrics.',
+      return { status:'heuristic',coverage:{controls:m.controls.length,components:m.components.length,internalParts:m.internals.reduce((n,c)=>n+c.parts.length,0),shadowRoots:roots.length-1,covered:m.focus.covered,frames:m.frames},focus:m.focus,tolerancePx:options.tolerancePx ?? 1, findings:inspectRules(m), typography:'Range mede caixas de texto; baseline e caixa de glifo são estimativas de TextMetrics.',
         internals:m.internals.map(c=>({ selector:selector(c.element), level:componentMap.get(c.element)?.level,
           parts:c.parts.map(p=>({ type:p.type,text:p.text,level:(componentMap.get(c.element)?.level||0)+1,inferred:!!p.inferred,bounds:p.bounds,baselineApprox:p.baselineApprox,inkTopApprox:p.inkTopApprox,inkBottomApprox:p.inkBottomApprox })) })) };
     },
@@ -1176,20 +1514,38 @@ function installVisualInspector(options) {
       if (c.typography.sizes.length) lines.push(`Tipografia: ${c.typography.families.map(x=>x.value).join(', ')} · tamanhos ${c.typography.sizes.map(x=>x.value).join(', ')} · pesos ${c.typography.weights.map(x=>x.value).join(', ')}`);
       if (c.radii.length) lines.push('Raios: '+c.radii.map(x=>x.value).join(', '));
       if (c.components.names.length) lines.push('Componentes: '+list(c.components.names,20,n=>`${n.name} ×${n.count}`));
+      if (c.platform.length) lines.push('Web moderna: '+c.platform.map(x=>`${x.pattern} ×${x.count} (busque "${x.query}")`).join('; '));
       lines.push(`Cobertura: ${m.components.length} componentes, ${m.controls.length} controles, ${roots.length-1} shadow roots abertos, somente a área visível`);
+      if (!m.focus.on) lines.push('Foco: desligado; elementos cobertos por outras camadas entram na inspeção');
+      else if (m.focus.covered) lines.push(`Foco: ${m.focus.layer ? `diálogo${m.focus.layer.name ? ' “'+m.focus.layer.name+'”' : ''} (${m.focus.layer.selector})` : 'camadas da frente'}; ${m.focus.covered} elementos cobertos ficaram de fora`);
+      if (m.frames) lines.push(`Frames: ${m.frames} de mesma origem sem inspeção; injete o inspetor dentro do frame`);
+      if (m.canvas) lines.push('Canvas: ocupa a maior parte da tela; o que é desenhado nele não é inspecionável');
       lines.push(`Achados (${findings.length}):`+(findings.length ? '' : ' nenhum candidato automático; a composição ainda exige inspeção visual'));
-      for (const f of findings.slice(0,maxFindings)) lines.push(`- [${f.confidence}] ${f.rule} · ${f.selector}${f.deltaPx===null ? '' : ' · '+f.deltaPx+' px'} · ${f.message}`);
-      if (findings.length>maxFindings) lines.push(`- e mais ${findings.length-maxFindings}; use VisualInspector.audit().findings`);
+      // Padrões repetidos geram muitos achados iguais: uma linha por regra, com os primeiros alvos.
+      const groups=new Map();
+      for (const f of findings) (groups.get(f.rule) || groups.set(f.rule,[]).get(f.rule)).push(f);
+      const order={ medido:0, requisito:1, candidato:2 };
+      const sorted=[...groups].sort((a,b)=>order[a[1][0].confidence]-order[b[1][0].confidence]);
+      for (const [rule,group] of sorted.slice(0,maxFindings)) {
+        const f=group[0];
+        lines.push(`- [${f.confidence}] ${rule}${group.length>1 ? ' ×'+group.length : ''} · ${f.selector}${f.deltaPx===null ? '' : ' · '+f.deltaPx+' px'} · ${f.message}`+(group.length>1 ? ` · também em ${list(group.slice(1),3,x=>x.selector)}` : ''));
+      }
+      if (sorted.length>maxFindings) lines.push(`- e mais ${sorted.length-maxFindings} regras; use VisualInspector.audit().findings`);
       return lines.join('\n');
     },
     remove() {
-      resizeObserver.disconnect(); mutationObserver.disconnect(); themeObserver.disconnect();
+      resizeObserver.disconnect(); mutationObserver.disconnect(); themeObserver.disconnect(); guard.disconnect(); panelObserver.disconnect();
       window.removeEventListener('resize', schedule);
       document.removeEventListener('scroll', schedule, true);
       document.removeEventListener('transitionend', schedule, true);
       document.removeEventListener('pointerover', inspect, true);
-      cancelAnimationFrame(frame);
-      guides.remove(); host.remove();
+      document.removeEventListener('toggle', schedule, true);
+      for (const type of ROUTED) window.removeEventListener(type,routed,true);
+      window.removeEventListener('pointermove',moveDrag,true);
+      window.removeEventListener('pointerup',endDrag,true);
+      window.removeEventListener('pointercancel',endDrag,true);
+      cancelAnimationFrame(frame); cancelAnimationFrame(touchFrame); clearTimeout(timer);
+      layer.remove(); host.remove();
       if (window.VisualInspector===api) delete window.VisualInspector;
       options.onRemove?.();
     }

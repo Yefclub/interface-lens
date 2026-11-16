@@ -17,9 +17,17 @@ async function panelInteraction(page) {
   const record = (name, passed, detail) => results.push({ name, passed:!!passed, detail });
   const rect = () => page.evaluate(() => { const b=document.getElementById('visual-inspector-panel').getBoundingClientRect(); return { x:b.x, y:b.y, width:b.width, height:b.height }; });
   const text = () => page.evaluate(() => document.getElementById('visual-inspector-panel').shadowRoot.textContent);
-  const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const settle = () => page.evaluate(() => { VisualInspector.refresh(); });
   await page.reload();
   await settle();
+
+  // Detectores de "clique fora" das aplicações escutam o documento; o painel não pode dispará-los.
+  await page.evaluate(() => { window.pageEvents = []; for (const type of ['pointerdown', 'mousedown', 'click']) document.addEventListener(type, () => window.pageEvents.push(type), true); });
+  const tab = await page.evaluate(() => { const b=document.getElementById('visual-inspector-panel').shadowRoot.getElementById('vi-tab-context').getBoundingClientRect(); return { x:b.x+b.width/2, y:b.y+b.height/2 }; });
+  await page.mouse.click(tab.x, tab.y);
+  const clicked = await page.evaluate(() => ({ tab:document.getElementById('visual-inspector-panel').shadowRoot.querySelector('[aria-selected="true"]').id, events:window.pageEvents }));
+  record('Clique em uma aba troca a aba sem chegar à aplicação', clicked.tab === 'vi-tab-context' && clicked.events.length === 0, clicked);
+  await page.evaluate(() => document.getElementById('visual-inspector-panel').shadowRoot.getElementById('vi-tab-inspect').dispatchEvent(new MouseEvent('click')));
 
   const sample = await page.locator('#sample').boundingBox();
   // O padding direito pertence ao botão: o centro cai no texto e a esquerda fica sob o controle oculto da fixture.
@@ -54,6 +62,35 @@ async function panelInteraction(page) {
   return results;
 }
 
+// Um <dialog> modal nativo torna o painel inerte; ele precisa continuar clicável sem fechar nem acionar o diálogo.
+async function panelUnderModal(page) {
+  const results = [];
+  const record = (name, passed, detail) => results.push({ name, passed:!!passed, detail });
+  const inPanel = selector => page.evaluate(selector => { const b=document.getElementById('visual-inspector-panel').shadowRoot.querySelector(selector).getBoundingClientRect(); return { x:b.x+b.width/2, y:b.y+b.height/2 }; }, selector);
+  await page.mouse.move(5, 5);
+  await page.reload();
+  await page.evaluate(() => {
+    window.pageClicks = 0;
+    document.addEventListener('click', () => { window.pageClicks++; });
+    document.getElementById('native').showModal();
+    VisualInspector.refresh();
+  });
+  const tab = await inPanel('#vi-tab-findings');
+  await page.mouse.click(tab.x, tab.y);
+  const state = await page.evaluate(() => ({ tab:document.getElementById('visual-inspector-panel').shadowRoot.querySelector('[aria-selected="true"]').id, open:document.getElementById('native').open, clicks:window.pageClicks }));
+  record('Clique no painel funciona sob dialog modal', state.tab === 'vi-tab-findings', state);
+  record('Clique no painel não chega à aplicação', state.open && state.clicks === 0, state);
+  const before = await page.evaluate(() => { VisualInspector.refresh(); return document.getElementById('visual-inspector-panel').getBoundingClientRect().x; });
+  const head = await inPanel('.title');
+  await page.mouse.move(head.x, head.y);
+  await page.mouse.down();
+  await page.mouse.move(head.x - 220, head.y - 180, { steps:6 });
+  await page.mouse.up();
+  const after = await page.evaluate(() => document.getElementById('visual-inspector-panel').getBoundingClientRect().x);
+  record('Painel pode ser arrastado sob dialog modal', Math.abs(before - after - 220) <= 1, { before, after });
+  return results;
+}
+
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}/tests/`;
@@ -69,12 +106,14 @@ async function panelInteraction(page) {
       if (!r.passed) { failed++; if (r.detail !== undefined) console.log('         ' + JSON.stringify(r.detail)); }
     }
   };
-  for (const file of ['browser.html', 'context.html']) {
+  for (const file of ['browser.html', 'context.html', 'focus.html']) {
     await page.goto(base + file);
     print(file, (await page.evaluate(() => window.runVisualTests())).results);
   }
   await page.goto(base + 'browser.html');
   print('interação com o painel', await panelInteraction(page));
+  await page.goto(base + 'focus.html');
+  print('painel sob dialog modal', await panelUnderModal(page));
   if (errors.length) { failed += errors.length; console.log('\nErros da página:\n' + errors.join('\n')); }
   await browser.close();
   server.close();

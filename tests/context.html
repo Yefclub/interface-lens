@@ -46,7 +46,6 @@
     const record=(name,condition,detail)=>results.push({name,passed:!!condition,detail});
     const context=()=>VisualInspector.context();
     const color=(c,name)=>c.tokens.colors.find(t=>t.name===name);
-    const frames=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     installVisualInspector();
 
     let c=context();
@@ -67,13 +66,13 @@
     c=context();
     record('Tema ativado é reconhecido na raiz',c.theme.themes.find(t=>t.selector==='.dark').active===true&&c.theme.themes.find(t=>t.selector==='.dark').target==='html'&&c.theme.appearance==='dark',c.theme);
     record('Tokens refletem o tema ativo',color(c,'--background').hex==='#0e0f12');
-    await frames();
+    VisualInspector.refresh();
     const panel=$('visual-inspector-panel').shadowRoot;
     panel.getElementById('vi-tab-context').click();
-    await frames();
+    VisualInspector.refresh();
     record('Painel mostra tema e tokens',/Escura/.test(panel.textContent)&&/--background/.test(panel.textContent)&&/dark \(\.dark\)/.test(panel.textContent));
     document.documentElement.classList.remove('dark');
-    await frames();
+    VisualInspector.refresh();
     record('Painel acompanha a troca de tema',/Clara/.test(panel.textContent));
 
     localStorage.setItem('theme','dark');
