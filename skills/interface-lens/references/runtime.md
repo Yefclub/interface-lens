@@ -31,6 +31,8 @@ Entram como componentes os elementos semânticos, os controles, os blocos de tex
 - `Superfície`: pinta um fundo diferente do que está atrás, sem as marcas de card.
 - `Gráfico`: SVG ou canvas de Recharts, ApexCharts, Highcharts, ECharts, Plotly ou Chart.js. Outros gráficos aparecem como `Canvas` ou `Imagem vetorial` (SVG maior que um ícone).
 
+Nas guias, cards, superfícies e gráficos têm contorno mais forte e uma etiqueta com o tipo no canto, porque o contorno coincide com a borda do próprio contêiner.
+
 Um contêiner com o mesmo fundo do que está atrás e sem borda nem sombra não é desenhado para ninguém e fica de fora. O conteúdo de um canvas não é inspecionável; só a caixa dele.
 
 ## Modo foco

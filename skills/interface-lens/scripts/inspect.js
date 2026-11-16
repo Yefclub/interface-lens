@@ -1143,7 +1143,14 @@ function installVisualInspector(options) {
     stroke(m.controls.map(e=>rectPath(box(e))).join(''),.3,'3 3');
     const framed=c=>/^(Card|Superfície|Gráfico|Imagem vetorial|Canvas|Imagem|Vídeo)$/.test(c.type);
     stroke(m.components.filter(c=>!controls.has(c.element) && !framed(c)).map(c=>rectPath(box(c.element))).join(''),.13,'3 3');
-    stroke(m.components.filter(c=>!controls.has(c.element) && framed(c)).map(c=>rectPath(box(c.element))).join(''),.34,'6 3');
+    stroke(m.components.filter(c=>!controls.has(c.element) && framed(c)).map(c=>rectPath(box(c.element))).join(''),.7,'6 3');
+    // O contorno de um contêiner coincide com a borda dele; a etiqueta no canto diz o que foi reconhecido ali.
+    for (const c of m.components) if (/^(Card|Superfície|Gráfico|Canvas)$/.test(c.type)) {
+      const b=box(c.element), width=c.type.length*5.4+8;
+      if (b.width<width+8 || b.height<22) continue;
+      element('rect', { x:round(b.x), y:round(b.y), width, height:14, rx:2, fill:'#991b1b', opacity:.9 });
+      element('text', { x:round(b.x)+4, y:round(b.y)+10.5, fill:'#fff', 'font-family':'ui-monospace,monospace', 'font-size':9 }, c.type);
+    }
     stroke(parts,.32);
     stroke(baselines,.32,'2 2');
     stroke(findings.map(f=>findingElement.get(f)).filter(e=>e!==document.documentElement).map(e=>rectPath(box(e))).join(''),.85);
