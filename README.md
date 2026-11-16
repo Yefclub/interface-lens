@@ -39,6 +39,7 @@ Execute [`inspect.js`](skills/interface-lens/scripts/inspect.js) como Snippet no
 VisualInspector.report();    // Tecnologias, tema, tokens, componentes e achados, em texto
 VisualInspector.context();   // O mesmo contexto em dados
 VisualInspector.audit();     // Achados com seletor e retângulo
+await VisualInspector.scan(); // Achados da página inteira, rolando a janela
 const antes = VisualInspector.snapshot();
 VisualInspector.diff(antes); // O que mudou desde então
 VisualInspector.refresh();   // Redesenha agora, antes de uma captura

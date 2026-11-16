@@ -40,10 +40,21 @@
     <button id="small" aria-label="Fechar exemplo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
     <div id="shadow-host"></div>
   </div>
+  <div class="examples">
+    <label for="field">Nome</label><input id="field" style="box-sizing:border-box;height:32px;padding:0 8px;border:1px solid #b9c1cc;font:inherit">
+    <img id="pic" alt="Exemplo" width="64" height="32">
+    <p id="sub" role="heading" aria-level="2">Seção</p>
+    <div id="tile">Bloco de texto</div>
+  </div>
   <button id="run">Executar testes</button>
   <p id="result" role="status">Aguardando execução.</p>
+  <div style="margin-top:1400px"><button id="far" aria-label="Fora da primeira tela" style="width:32px;padding:0"><svg style="transform:translateY(5px)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16"/></svg></button></div>
 </main>
 <script>
+  // Imagem sintética de 40×20, exibida em 64×32: mesma proporção.
+  const drawing=Object.assign(document.createElement('canvas'),{width:40,height:20});
+  drawing.getContext('2d').fillRect(4,4,32,12);
+  document.getElementById('pic').src=drawing.toDataURL();
   document.getElementById('shadow-host').attachShadow({mode:'open'}).innerHTML='<button aria-label="Dentro do shadow root" style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid #b9c1cc;border-radius:8px;background:#fff"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16"/></svg></button>';
 </script>
 <script src="../skills/interface-lens/scripts/inspect.js"></script>
@@ -126,6 +137,48 @@
     record('color-scheme escuro declarado deixa de ser acusado',!found('esquema-nativo'));
     document.documentElement.style.colorScheme='';
     document.body.style.background='';
+
+    $('tile').style.minWidth='2000px';
+    record('Elemento mais largo que a página detectado',found('estouro-horizontal',f=>f.selector==='#tile'));
+    $('tile').style.minWidth='';
+    const pic=$('pic'), source=pic.src;
+    await pic.decode();
+    pic.style.height='64px';
+    record('Imagem esticada detectada',found('imagem-distorcida',f=>f.selector==='#pic'));
+    pic.style.height='';
+    pic.removeAttribute('alt');
+    record('Imagem sem alt detectada',found('imagem-sem-alt',f=>f.selector==='#pic'));
+    pic.setAttribute('alt','Exemplo');
+    pic.src='arquivo-que-nao-existe.png';
+    await new Promise(resolve=>pic.addEventListener('error',resolve,{once:true}));
+    record('Imagem que não carregou detectada',found('imagem-quebrada'));
+    pic.src=source;
+    await pic.decode();
+    document.querySelector('label[for="field"]').htmlFor='';
+    record('Campo sem rótulo detectado',found('campo-sem-rotulo',f=>f.selector==='#field'));
+    document.querySelector('label').htmlFor='field';
+    $('tile').style.cursor='pointer';
+    record('Elemento clicável sem papel detectado',found('clicavel-sem-papel',f=>f.selector==='#tile')&&VisualInspector.measurements().components.some(c=>c.type==='Clicável'));
+    $('tile').style.cursor='';
+    $('tile').style.fontSize='10px';
+    record('Texto pequeno detectado',found('texto-pequeno',f=>f.selector==='#tile'));
+    $('tile').style.fontSize='';
+    $('sub').setAttribute('aria-level','4');
+    record('Salto na hierarquia de títulos detectado',found('hierarquia-titulos',f=>f.selector==='#sub'));
+    $('sub').setAttribute('aria-level','2');
+    const viewport=document.querySelector('meta[name="viewport"]'), content=viewport.content;
+    viewport.content=content+',user-scalable=no';
+    record('Zoom bloqueado detectado',found('zoom-bloqueado'));
+    viewport.content=content;
+    $('run').style.height='31px';
+    record('Altura quase igual à dos demais controles detectada',found('quase-igual-altura',f=>f.selector==='#run'&&f.deltaPx===1));
+    $('run').style.height='';
+    $('pattern').style.borderRadius='7px';
+    record('Raio quase igual ao dos demais detectado',found('quase-igual-raio',f=>f.deltaPx===1));
+    $('pattern').style.borderRadius='';
+    record('Achados trazem a categoria',(()=>{ $('intro').style.color='#c5c9d0'; const f=audit().findings.find(x=>x.rule==='contraste-texto'); $('intro').style.color=''; return f?.category==='legibilidade'; })());
+    const scan=await VisualInspector.scan();
+    record('Varredura da página encontra o que está fora da primeira tela',scan.complete&&scan.findings.some(f=>f.rule==='icone-botao-y'&&f.selector.includes('Fora da primeira tela'))&&!found('icone-botao-y')&&scrollY===0,scan);
 
     const shadowIcon=$('shadow-host').shadowRoot.querySelector('svg');
     shadowIcon.style.transform='translateY(5px)';
