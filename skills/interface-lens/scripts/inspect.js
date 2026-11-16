@@ -1,6 +1,6 @@
 /* Interface Lens: inspetor visual. Execute como Snippet ou injete em qualquer página.
  * Lê DOM, estilos, caixas de texto e ícones; não altera o conteúdo da página.
- * API: VisualInspector.report(), .context(), .audit(), .measurements(), .snapshot(), .diff(), .refresh(),
+ * API: VisualInspector.report(), .context(), .audit(), .scan(), .measurements(), .snapshot(), .diff(), .refresh(),
  *      .select(), .toggleFocus(), .toggleGuides(), .togglePanel(), .movePanel(), .remove().
  */
 function installVisualInspector(options) {
@@ -11,30 +11,33 @@ function installVisualInspector(options) {
     return null;
   }
   window.VisualInspector?.remove();
-  const VERSION='3.1.0';
+  const VERSION='3.2.0';
   const style=options.mockStyle || null;
   const hooks=options.selectors || {};
   const nameAttributes=options.nameAttributes || [];
   const query=s=>s ? document.querySelector(s) : null;
   const svgNS='http://www.w3.org/2000/svg';
   const ACTION='button,a[href],summary,[role="button"],[role="link"],[role="menuitem"],[role="menuitemradio"]';
-  const CONTROL=ACTION+',input:not([type="hidden"]),textarea,select,[role="textbox"],[role="checkbox"],[role="switch"],[role="slider"],[role="progressbar"],[role="menuitemcheckbox"],[role="tab"],[role="option"]';
+  const CONTROL=ACTION+',input:not([type="hidden"]),textarea,select,[role="textbox"],[role="checkbox"],[role="switch"],[role="slider"],[role="progressbar"],[role="menuitemcheckbox"],[role="tab"],[role="option"],[role="radio"],[role="combobox"],[role="searchbox"],[role="spinbutton"],[role="treeitem"],[contenteditable=""],[contenteditable="true"]';
+  const FIELD='input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),select,textarea';
 
-  // As guias também ficam em shadow root: regras da página para svg, text ou rect não as alcançam.
+  // As guias também ficam em shadow root, fora do alcance do CSS da página.
   const layer=document.createElement('div');
   layer.id='visual-inspector-guides';
   layer.setAttribute('aria-hidden','true');
-  layer.style.cssText='all:initial;display:block;position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:2147483000';
-  const guides=document.createElementNS(svgNS,'svg');
-  guides.style.cssText='position:absolute;inset:0;width:100%;height:100%';
-  layer.attachShadow({mode:'open'}).append(guides);
+  // contain isola o layout: redesenhar as guias não invalida o layout da página.
+  layer.style.cssText='all:initial;display:block;position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:2147483000;contain:strict';
+  // Dois canvas: a base (todos os contornos) só muda quando a página muda; a seleção acompanha o ponteiro.
+  const baseCanvas=document.createElement('canvas'), selectionCanvas=document.createElement('canvas');
+  for (const surface of [baseCanvas,selectionCanvas]) surface.style.cssText='position:absolute;inset:0;width:100%;height:100%';
+  layer.attachShadow({mode:'open'}).append(baseCanvas,selectionCanvas);
   // Fora do body: bibliotecas de modal marcam os filhos do body como inertes e a hidratação estranha nós a mais ali.
   document.documentElement.append(layer);
 
   // O painel vive em shadow root: o CSS da página não o alcança e ele não vaza estilos.
   const host=document.createElement('div');
   host.id='visual-inspector-panel';
-  host.style.cssText='all:initial;position:fixed;left:0;top:0;z-index:2147483001';
+  host.style.cssText='all:initial;position:fixed;left:0;top:0;z-index:2147483001;contain:layout style';
   const shadow=host.attachShadow({mode:'open'});
   const h=(tag,props,...kids)=>{
     const e=document.createElement(tag);
@@ -151,6 +154,20 @@ function installVisualInspector(options) {
   function collectRoots() {
     roots=[document];
     for (let i=0; i<roots.length; i++) for (const e of roots[i].querySelectorAll('*')) if (e.shadowRoot && !own(e)) roots.push(e.shadowRoot);
+  }
+  // Elementos HTML que tocam a viewport. Uma subárvore fora da tela é descartada pela caixa do seu topo, o que mantém
+  // a varredura proporcional ao que está visível; descendentes posicionados que escapam dessa caixa ficam de fora.
+  function inView(root, out=[]) {
+    for (const e of root.children) {
+      if (own(e) || e.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue;
+      const b = box(e);
+      if (b.width || b.height) { if (b.bottom < 0 || b.top > innerHeight || b.right < 0 || b.left > innerWidth) continue; }
+      else if (computed(e).display === 'none') continue;
+      out.push(e);
+      inView(e,out);
+      if (e.shadowRoot) inView(e.shadowRoot,out);
+    }
+    return out;
   }
   const box = e => {
     if (!geometryCache.has(e)) geometryCache.set(e,e.getBoundingClientRect());
@@ -401,9 +418,9 @@ function installVisualInspector(options) {
     return !!(bg && bg[3]) || bordered(c) || castsShadow(c);
   };
   // Contêiner sem semântica que pinta uma caixa visível: card, painel, barra. Fundos iguais ao que está atrás não contam.
-  function paintsBox(e) {
+  function paintsBox(e, minWidth=48, minHeight=32) {
     const b=box(e);
-    if (b.width<48 || b.height<32 || b.width>=innerWidth*.95 && b.height>=innerHeight*.95) return false;
+    if (b.width<minWidth || b.height<minHeight || b.width>=innerWidth*.95 && b.height>=innerHeight*.95) return false;
     const c=computed(e);
     if (bordered(c) || castsShadow(c) || c.backgroundImage!=='none') return true;
     const bg=rgba(c.backgroundColor);
@@ -548,6 +565,11 @@ function installVisualInspector(options) {
   // Conteúdo distribuído por <slot> não é descendente do controle no shadow root, mas é o que ele mostra.
   const slotted=e=>[...e.querySelectorAll('slot')].flatMap(slot=>slot.assignedNodes({ flatten:true })).filter(n=>n.nodeType===1 || n.textContent.trim());
   const labelOf=e=>e.getAttribute('aria-label') || (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id=>id && e.getRootNode().getElementById?.(id)?.textContent.trim()).filter(Boolean).join(' ') || e.querySelector('h1,h2,h3,[role="heading"]')?.textContent.trim() || '';
+  // O papel declarado vale mais que a tag: um <ul role="menu"> é um menu.
+  const ROLES={ button:'Botão', link:'Link', textbox:'Campo', searchbox:'Campo', spinbutton:'Campo', combobox:'Seletor', checkbox:'Caixa de seleção', radio:'Opção', switch:'Chave', slider:'Slider', progressbar:'Progresso', menuitem:'Item de menu', menuitemradio:'Opção de menu', menuitemcheckbox:'Opção de menu', tab:'Aba', option:'Opção', treeitem:'Item',
+    dialog:'Diálogo', alertdialog:'Diálogo', group:'Grupo', article:'Artigo', menu:'Menu', menubar:'Menu', listbox:'Lista', list:'Lista', tree:'Árvore', grid:'Tabela', tablist:'Abas', tabpanel:'Painel', toolbar:'Barra de ferramentas', search:'Busca', navigation:'Navegação', banner:'Cabeçalho', main:'Conteúdo', complementary:'Barra lateral', contentinfo:'Rodapé', region:'Seção', alert:'Alerta', status:'Status', tooltip:'Dica', note:'Nota' };
+  const TAGS={ NAV:'Navegação', MAIN:'Conteúdo', ASIDE:'Barra lateral', HEADER:'Cabeçalho', FOOTER:'Rodapé', BUTTON:'Botão', A:'Link', SUMMARY:'Ação expansível', DETAILS:'Detalhes', LABEL:'Rótulo', P:'Parágrafo', UL:'Lista', OL:'Lista', DL:'Lista', LI:'Item', PRE:'Código', BLOCKQUOTE:'Citação', FIGURE:'Figura', TABLE:'Tabela', TH:'Célula', TD:'Célula', ARTICLE:'Artigo',
+    H1:'Título', H2:'Título', H3:'Título', H4:'Título', H5:'Título', H6:'Título', INPUT:'Campo', TEXTAREA:'Campo', SELECT:'Seletor', SECTION:'Seção', FORM:'Formulário', FIELDSET:'Grupo de campos', DIALOG:'Diálogo', PROGRESS:'Progresso', METER:'Medidor', SVG:'Ícone', IMG:'Imagem', VIDEO:'Vídeo', AUDIO:'Áudio', CANVAS:'Canvas', IFRAME:'Frame' };
   let componentMap = new Map();
   let hovered = null;
   let pinned = null;
@@ -561,7 +583,7 @@ function installVisualInspector(options) {
         if (walker.currentNode.textContent.trim() && shown(p)) textParents.add(p);
       }
     }
-    const groups = all('nav,main,aside,section,header,footer,form,label,p,li,pre,blockquote,table,th,td,article,[role="article"],dialog,[role="dialog"],[role="alertdialog"],[role="group"],h1,h2,h3,video,audio,canvas,iframe,svg,img'+(hooks.components ? ','+hooks.components : ''));
+    const groups = all('nav,main,aside,section,header,footer,form,fieldset,label,p,ul,ol,dl,li,pre,blockquote,figure,details,table,th,td,article,dialog,h1,h2,h3,h4,h5,h6,progress,meter,video,audio,canvas,iframe,svg,img,'+Object.keys(ROLES).map(role=>`[role="${role}"]`).join(',')+(hooks.components ? ','+hooks.components : ''));
     for (const icon of groups.filter(e=>e.matches('svg,img'))) {
       const parent=icon.parentElement;
       if (parent && parent.children.length===1 && !parent.textContent.trim() && /flex|grid/.test(computed(parent).display)) groups.push(parent);
@@ -575,7 +597,18 @@ function installVisualInspector(options) {
       if (only && Math.abs(only.width-box(a).width)<=1 && Math.abs(only.height-box(a).height)<=1) continue;
       if (!own(a) && paintsBox(a) && shown(a)) { surfaces.add(a); nodes.push(a); }
     }
+    // O que sobra não tem texto nem controle dentro: barras, avatares, esqueletos e divisórias que só pintam uma caixa,
+    // e elementos que respondem ao clique sem serem botão nem link.
+    const blocks = new Set(), clickables = new Set();
+    for (const e of inView(document.body)) {
+      const css = computed(e);
+      if (css.cursor === 'pointer' && up(e) && computed(up(e)).cursor !== 'pointer' && !e.closest(CONTROL+',label,summary') && !e.querySelector(CONTROL+',label') && shown(e)) {
+        clickables.add(e);
+        if (!tested.has(e)) nodes.push(e);
+      } else if (!tested.has(e) && (css.backgroundColor !== 'rgba(0, 0, 0, 0)' || css.backgroundImage !== 'none' || parseFloat(css.borderTopWidth) > 0) && paintsBox(e,8,8) && shown(e)) { blocks.add(e); nodes.push(e); }
+    }
     const nodeSet = new Set(nodes);
+    nodes.length = 0; nodes.push(...nodeSet);
     const components = nodes.map(e => {
       let parent = up(e);
       while (parent && !nodeSet.has(parent)) parent = up(parent);
@@ -583,8 +616,7 @@ function installVisualInspector(options) {
       for (let a=parent; a; a=up(a)) if (nodeSet.has(a)) level++;
       const custom=options.describe?.(e) || {};
       const role=e.getAttribute('role');
-      const type=custom.type || ({ NAV:'Navegação', MAIN:'Conteúdo', ASIDE:'Barra lateral', BUTTON:'Botão', A:'Link', SUMMARY:'Ação expansível', LABEL:'Rótulo', P:'Parágrafo', LI:'Item', PRE:'Código', BLOCKQUOTE:'Citação', TABLE:'Tabela', TH:'Célula', TD:'Célula', ARTICLE:'Artigo', H1:'Título', H2:'Título', H3:'Título', INPUT:'Campo', TEXTAREA:'Campo', SELECT:'Seletor', SECTION:'Seção', FORM:'Formulário', DIALOG:'Diálogo', SVG:'Ícone', IMG:'Imagem', VIDEO:'Vídeo', AUDIO:'Áudio', CANVAS:'Canvas', IFRAME:'Frame' }[e.tagName.toUpperCase()] ||
-        { button:'Botão', textbox:'Campo', dialog:'Diálogo', alertdialog:'Diálogo', group:'Grupo', slider:'Slider', progressbar:'Progresso', menuitem:'Item de menu', menuitemradio:'Opção de menu', menuitemcheckbox:'Opção de menu', tab:'Aba', option:'Opção' }[role] || (textParents.has(e) ? 'Texto' : surfaces.has(e) ? 'Superfície' : 'Grupo'));
+      const type=custom.type || ROLES[role] || TAGS[e.tagName.toUpperCase()] || (clickables.has(e) ? 'Clicável' : textParents.has(e) ? 'Texto' : surfaces.has(e) ? 'Superfície' : blocks.has(e) ? 'Bloco' : 'Grupo');
       const chart=chartOf(e), large=e.localName==='svg' && Math.max(box(e).width,box(e).height)>48;
       const kind=custom.type || (chart ? 'Gráfico' : large ? 'Imagem vetorial' : type);
       const name=custom.name || ['aria-label',...nameAttributes,'alt','title'].map(a=>e.getAttribute(a)).find(Boolean) || (['Botão','Linha','Título','Texto','Link'].includes(kind) ? e.textContent.trim().slice(0,64) : surfaces.has(e) && (e.querySelector('h1,h2,h3,h4,h5,h6,[role="heading"]')?.textContent || e.textContent).trim().replace(/\s+/g,' ').slice(0,40) || chart || kind);
@@ -599,7 +631,7 @@ function installVisualInspector(options) {
       if (bordered(css) || castsShadow(css) || parseFloat(css.borderTopLeftRadius)) c.type='Card';
     }
     componentMap = new Map(components.map(c => [c.element,c]));
-    return { components, textParents };
+    return { components, textParents, clickables };
   }
   function measure() {
     // Uma leitura por elemento em cada snapshot; nunca reaproveitar após edição.
@@ -617,7 +649,7 @@ function installVisualInspector(options) {
     const toolbar=toolbarRoot ? [...toolbarRoot.querySelectorAll('button')].filter(e=>visible(e) && box(e).y>=box(toolbarRoot).y-1 && box(e).bottom<=box(toolbarRoot).bottom+1) : [];
     const controls = all(CONTROL).filter(e => !own(e) && shown(e));
     const sidebarActions = sidebar && hooks.actions ? [...sidebar.querySelectorAll(hooks.actions)].filter(visible) : [];
-    const { components, textParents } = identify(controls);
+    const { components, textParents, clickables } = identify(controls);
     const internals = controls.filter(e=>e.matches(ACTION)).map(e=>({ element:e, parts:partsFor(e) }));
     for (const c of components.filter(c=>c.type==='Texto' || c.element.matches('p,h1,h2,h3,th,td,label'))) internals.push({element:c.element,parts:partsFor(c.element,true)});
     const labelLevels=new Map();
@@ -639,7 +671,7 @@ function installVisualInspector(options) {
       return c && (c.right-c.left)*(c.bottom-c.top)>innerWidth*innerHeight*.5 && POINTS.filter(([fx,fy])=>e.getRootNode().elementFromPoint(c.left+(c.right-c.left)*fx,c.top+(c.bottom-c.top)*fy)===e).length>=3;
     });
     return {
-      focus, frames, canvas,
+      focus, frames, canvas, clickables,
       sidebar, composer, main, rows, labels, toolbar, controls, sidebarActions, components, internals, textParents,
       textDelta: Math.max(0,...[...labelLevels.values()].map(spread)),
       toolbarDelta: spread(toolbar.map(centerY)),
@@ -688,13 +720,22 @@ function installVisualInspector(options) {
     return groups;
   }
   const findingElement=new WeakMap();
+  const CATEGORY={};
+  for (const [category,rules] of Object.entries({
+    alinhamento:'icone-texto-y icone-botao-x icone-botao-y conteudo-botao-x icone-slot-x icone-slot-y componente-linha-y coluna-titulos centro-toolbar coluna-acoes',
+    consistência:'ritmo-gap borda-inicial dimensao-irmaos raio-concentrico quase-igual-altura quase-igual-raio altura-toolbar padrao-width padrao-height sombra-prompt esquema-nativo',
+    legibilidade:'texto-cortado contraste-texto texto-pequeno',
+    layout:'estouro-horizontal',
+    mídia:'imagem-quebrada imagem-distorcida',
+    acessibilidade:'alvo-minimo controle-sem-nome imagem-sem-alt campo-sem-rotulo clicavel-sem-papel hierarquia-titulos zoom-bloqueado'
+  })) for (const rule of rules.split(' ')) CATEGORY[rule]=category;
   function inspectRules(m) {
     const findings=[];
     // 1 CSS px absorve arredondamento subpixel de fonte/DPR; não esconde 2–4px.
     const tolerance=options.tolerancePx ?? 1;
     function flag(rule, e, delta, message, confidence, extra) {
       if (options.rules?.[rule]===false) return;
-      const finding={ rule, selector:selector(e), component:e.getAttribute('aria-label') || e.textContent.trim().slice(0,64), deltaPx:delta===null ? null : round(delta), tolerancePx:tolerance, confidence, message, bounds:bounds(box(e)), ...extra };
+      const finding={ rule, category:CATEGORY[rule], selector:selector(e), component:e.getAttribute('aria-label') || e.textContent.trim().slice(0,64), deltaPx:delta===null ? null : round(delta), tolerancePx:tolerance, confidence, message, bounds:bounds(box(e)), ...extra };
       findingElement.set(finding,e);
       findings.push(finding);
     }
@@ -715,8 +756,9 @@ function installVisualInspector(options) {
       const css=computed(e);
       if (!parts.length || slotted(e).length) continue;
       const ys=parts.map(p=>midY(p.bounds));
-      // Ícone empilhado acima ou abaixo do texto é uma coluna, não um par a alinhar pelo centro.
-      const stacked=texts.length===1 && icons.some(i=>i.bounds.bottom<=texts[0].bounds.y || i.bounds.y>=texts[0].bounds.bottom);
+      // Ícone empilhado acima ou abaixo do texto é uma coluna, e texto sobre o ícone é um selo: nenhum dos dois é um par a alinhar pelo centro.
+      const over=(a,b)=>a.x<b.right && a.right>b.x && a.y<b.bottom && a.bottom>b.y;
+      const stacked=texts.length===1 && icons.some(i=>i.bounds.bottom<=texts[0].bounds.y || i.bounds.y>=texts[0].bounds.bottom || over(i.bounds,texts[0].bounds));
       if (texts.length===1 && icons.length && !stacked && /center/.test(css.alignItems)) {
         add('icone-texto-y',e,spread(ys),'Centro da caixa de texto e dos ícones difere; conferir alinhamento óptico.','candidato');
       }
@@ -814,6 +856,61 @@ function installVisualInspector(options) {
     if (page && luminance(page)<.18 && !/dark/.test(computed(document.documentElement).colorScheme)) {
       flag('esquema-nativo',document.documentElement,null,'Tema escuro sem `color-scheme: dark` em html; barras de rolagem e controles nativos permanecem claros.','candidato');
     }
+    // Rolagem horizontal da página: quase sempre um elemento mais largo que a tela.
+    const pageWidth=document.documentElement.clientWidth, spill=document.documentElement.scrollWidth-pageWidth;
+    if (spill>tolerance) {
+      const wide=m.components.filter(c=>computed(c.element).position!=='fixed' && box(c.element).right+scrollX>pageWidth+tolerance);
+      const outer=wide.filter(c=>!wide.some(o=>o!==c && within(c.element,o.element))).slice(0,5);
+      for (const c of outer) flag('estouro-horizontal',c.element,box(c.element).right+scrollX-pageWidth,`Passa ${round(box(c.element).right+scrollX-pageWidth)} px da largura da página e cria rolagem horizontal.`,'medido');
+      if (!outer.length) flag('estouro-horizontal',document.documentElement,spill,`A página rola na horizontal: o conteúdo passa ${round(spill)} px da largura da tela.`,'medido');
+    }
+    for (const { element:e } of m.components) {
+      if (e.localName!=='img') continue;
+      const b=box(e), natural=e.naturalWidth/e.naturalHeight, drawn=b.width/b.height, ratio=n=>Math.round(n*100)/100;
+      if (e.complete && !e.naturalWidth && (e.currentSrc || e.getAttribute('src'))) flag('imagem-quebrada',e,null,'A imagem não carregou.','medido');
+      else if (e.naturalWidth>8 && e.naturalHeight>8 && computed(e).objectFit==='fill' && !/\.svg(\?|#|$)|^data:image\/svg/i.test(e.currentSrc) && Math.abs(natural-drawn)/natural>.05) {
+        flag('imagem-distorcida',e,null,`Imagem esticada: exibida na proporção ${ratio(drawn)}, original em ${ratio(natural)}.`,'candidato');
+      }
+      if (!e.hasAttribute('alt') && e.getAttribute('role')!=='presentation' && !e.closest('[aria-hidden="true"]')) flag('imagem-sem-alt',e,null,'Imagem sem o atributo alt; use alt="" quando for decorativa.','medido');
+    }
+    for (const e of m.controls) {
+      if (e.matches(FIELD) && !e.labels?.length && !e.closest('label') && !['aria-label','aria-labelledby','title','placeholder'].some(a=>e.getAttribute(a))) {
+        flag('campo-sem-rotulo',e,null,'Campo sem rótulo: falta um label associado, aria-label ou aria-labelledby.','medido');
+      }
+    }
+    for (const e of m.clickables) {
+      flag('clicavel-sem-papel',e,null,e.hasAttribute('tabindex') ? 'Elemento clicável sem papel de botão ou link; leitores de tela não o anunciam como controle.' : 'Elemento clicável sem papel de botão ou link e fora da ordem de foco; o teclado não o alcança.','candidato');
+    }
+    const small=new Map();
+    for (const p of m.textParents) {
+      const size=parseFloat(computed(p).fontSize);
+      if (size>=12 || p.closest('sup,sub')) continue;
+      const group=small.get(size) || small.set(size,{ element:p, count:0 }).get(size);
+      group.count++;
+    }
+    for (const [size,group] of small) flag('texto-pequeno',group.element,null,`Texto de ${round(size)} px${group.count>1 ? ` em ${group.count} lugares` : ''}; abaixo de 12 px a leitura fica difícil.`,'candidato',{ count:group.count });
+    let previous=0;
+    for (const heading of all('h1,h2,h3,h4,h5,h6,[role="heading"][aria-level]')) {
+      if (own(heading) || !box(heading).width) continue;
+      const level=+(heading.getAttribute('aria-level') || heading.localName[1]);
+      if (previous && level>previous+1 && componentMap.has(heading)) flag('hierarquia-titulos',heading,null,`Título de nível ${level} logo depois de um de nível ${previous}; a hierarquia pula níveis.`,'candidato');
+      previous=level;
+    }
+    const scale=document.querySelector('meta[name="viewport"]')?.content || '';
+    if (/user-scalable\s*=\s*(no|0)/i.test(scale) || parseFloat(/maximum-scale\s*=\s*([\d.]+)/i.exec(scale)?.[1])<2) flag('zoom-bloqueado',document.documentElement,null,'O meta viewport impede ou limita o zoom da página.','medido');
+    // Um valor quase igual ao padrão da tela costuma ser acidente: 35 px entre controles de 36 px, raio de 7 px entre raios de 8 px.
+    const nearMiss=(rule,items,limit,describe)=>{
+      const groups=new Map();
+      for (const [e,value] of items) { const key=Math.round(value*2)/2; (groups.get(key) || groups.set(key,[]).get(key)).push(e); }
+      for (const [value,list] of groups) {
+        const standard=[...groups].find(([other,peers])=>Math.abs(other-value)>=1 && Math.abs(other-value)<=limit && peers.length>=4 && peers.length>=list.length*4);
+        if (standard) flag(rule,list[0],Math.abs(standard[0]-value),describe(value,standard[0],list.length,standard[1].length),'candidato',{ count:list.length });
+      }
+    };
+    nearMiss('quase-igual-altura',m.controls.filter(e=>e.matches(FIELD) || e.matches(ACTION) && computed(e).display!=='inline' && surface(e)).map(e=>[e,box(e).height]),2,
+      (value,standard,count,peers)=>`Altura de ${value} px em ${count} ${count>1 ? 'controles' : 'controle'}; outros ${peers} medem ${standard} px.`);
+    nearMiss('quase-igual-raio',m.components.filter(c=>surface(c.element) && radiusOf(c.element)>0 && radiusOf(c.element)<Math.min(box(c.element).width,box(c.element).height)/2).map(c=>[c.element,radiusOf(c.element)]),1,
+      (value,standard,count,peers)=>`Raio de ${value} px em ${count} ${count>1 ? 'elementos' : 'elemento'}; outros ${peers} usam ${standard} px.`);
     for (const cohort of options.cohorts || []) {
       for (const e of document.querySelectorAll(cohort.selector)) {
         if (!shown(e)) continue;
@@ -1062,7 +1159,7 @@ function installVisualInspector(options) {
   }
   function usage(m) {
     const colors=new Map(), count=()=>new Map();
-    const type={ families:count(), sizes:count(), weights:count() }, radii=count();
+    const type={ families:count(), sizes:count(), weights:count() }, radii=count(), spacing=count(), heights=count();
     const bump=(map,key)=>map.set(key,(map.get(key) || 0)+1);
     const note=(value,role)=>{
       const c=rgba(value);
@@ -1081,79 +1178,78 @@ function installVisualInspector(options) {
       const css=computed(e);
       note(css.backgroundColor,'background');
       if (parseFloat(css.borderTopWidth)>0 && css.borderTopStyle!=='none') note(css.borderTopColor,'border');
+      for (const value of [css.paddingTop,css.paddingLeft,/flex|grid/.test(css.display) ? css.columnGap : '',/flex|grid/.test(css.display) ? css.rowGap : '']) if (parseFloat(value)>0) bump(spacing,round(parseFloat(value))+'px');
+      if (e.matches(ACTION+','+FIELD) && css.display!=='inline') bump(heights,round(box(e).height)+'px');
       const radius=css.borderTopLeftRadius.split(' ')[0];
       if (parseFloat(radius)) bump(radii,radius.endsWith('%') ? radius : parseFloat(radius)>=500 ? 'pílula' : round(parseFloat(radius))+'px');
     }
     const top=(map,limit=8)=>[...map].sort((a,b)=>b[1]-a[1]).slice(0,limit).map(([value,count])=>({ value, count }));
     const palette=[...colors.values()].sort((a,b)=>b.text+b.background+b.border-a.text-a.background-a.border).slice(0,24);
-    return { used:new Set(colors.keys()), palette, typography:{ families:top(type.families), sizes:top(type.sizes), weights:top(type.weights) }, radii:top(radii) };
+    return { used:new Set(colors.keys()), palette, typography:{ families:top(type.families), sizes:top(type.sizes), weights:top(type.weights) }, radii:top(radii), spacing:top(spacing,10), controlHeights:top(heights,6) };
   }
   function context(m=measure()) {
-    const scan=scanStyles(), { used, palette, typography, radii }=usage(m), { tokens, index }=readTokens(scan,used);
+    const scan=scanStyles(), { used, palette, typography, radii, spacing, controlHeights }=usage(m), { tokens, index }=readTokens(scan,used);
     for (const color of palette) color.tokens=(index.get(color.hex) || []).slice(0,3);
     const theme=readTheme(scan);
-    const data={ version:VERSION, route:location.pathname, viewport:{ width:innerWidth, height:innerHeight, dpr:devicePixelRatio }, focus:m.focus, technologies:technologies(scan), theme, tokens, palette, typography, radii, components:inventory(m), platform:platformHints(theme) };
+    const data={ version:VERSION, route:location.pathname, viewport:{ width:innerWidth, height:innerHeight, dpr:devicePixelRatio }, focus:m.focus, technologies:technologies(scan), theme, tokens, palette, typography, radii, spacing, controlHeights, components:inventory(m), platform:platformHints(theme) };
     return { data, index };
   }
 
-  // A base (todos os contornos) só muda quando a página muda; a seleção é redesenhada a cada movimento do ponteiro.
-  const baseGroup=document.createElementNS(svgNS,'g'), selectionGroup=document.createElementNS(svgNS,'g');
-  guides.append(baseGroup,selectionGroup);
-  let canvas=baseGroup;
-  function element(tag, attrs, text) {
-    const e = document.createElementNS(svgNS, tag);
-    for (const [key, value] of Object.entries(attrs)) e.setAttribute(key, String(value));
-    if (text !== undefined) e.textContent = text;
-    canvas.append(e);
+  // As guias são desenhadas em canvas: milhares de contornos sem criar nós nem forçar o layout da página.
+  let pen=null;
+  function prepare(surface) {
+    const ratio=Math.min(2,devicePixelRatio || 1), width=Math.round(innerWidth*ratio), height=Math.round(innerHeight*ratio);
+    if (surface.width!==width || surface.height!==height) { surface.width=width; surface.height=height; }
+    pen=surface.getContext('2d');
+    pen.setTransform(ratio,0,0,ratio,0,0);
+    pen.clearRect(0,0,innerWidth,innerHeight);
   }
-  const rectPath = b => `M${round(b.x)} ${round(b.y)}h${round(b.width)}v${round(b.height)}h${-round(b.width)}Z`;
-  // Um halo claro sob o traço mantém a guia legível sobre fundos escuros ou saturados.
-  const stroke = (d, opacity, dash) => {
-    if (!d) return;
-    element('path', { d, fill:'none', stroke:'#fff', 'stroke-width':2.5, 'stroke-dasharray':dash || 'none', opacity:opacity*.35 });
-    element('path', { d, fill:'none', stroke:red, 'stroke-width':1, 'stroke-dasharray':dash || 'none', opacity });
-  };
   const red = '#ef4444';
-  const line = (x1, y1, x2, y2, opacity = .65) => element('line', { x1, y1, x2, y2, stroke:red, 'stroke-width':1, opacity });
-  function label(x, y, text) {
-    element('rect', { x:x-4, y:y-12, width:text.length*6.8+8, height:18, rx:3, fill:'#991b1b', opacity:.94 });
-    element('text', { x, y, fill:'#fff', 'font-family':'ui-monospace,monospace', 'font-size':11 }, text);
+  const crisp = n => Math.round(n)+.5;
+  // Um halo claro sob o traço mantém a guia legível sobre fundos escuros ou saturados.
+  function strokePath(trace, opacity, dash) {
+    pen.setLineDash(dash || []);
+    pen.beginPath();
+    trace();
+    pen.globalAlpha=opacity*.35; pen.strokeStyle='#fff'; pen.lineWidth=2.5; pen.stroke();
+    pen.globalAlpha=opacity; pen.strokeStyle=red; pen.lineWidth=1; pen.stroke();
   }
-  function outline(e, opacity = .3, solid = false) {
-    const b = box(e);
-    element('rect', { x:b.x, y:b.y, width:b.width, height:b.height, rx:3, fill:'none', stroke:red, 'stroke-width':1, 'stroke-dasharray':solid ? 'none' : '3 3', opacity });
+  const boxes = (list, opacity, dash) => {
+    if (list.length) strokePath(()=>{ for (const b of list) pen.rect(crisp(b.x),crisp(b.y),Math.max(0,Math.round(b.width)-1),Math.max(0,Math.round(b.height)-1)); },opacity,dash);
+  };
+  const line = (x1, y1, x2, y2, opacity = .65, dash) => strokePath(()=>{ pen.moveTo(crisp(x1),crisp(y1)); pen.lineTo(crisp(x2),crisp(y2)); },opacity,dash);
+  function label(x, y, text, size = 11) {
+    pen.setLineDash([]);
+    pen.font=`${size}px ui-monospace,SFMono-Regular,Menlo,monospace`;
+    const width=pen.measureText(text).width+8, height=size+7;
+    pen.globalAlpha=.94; pen.fillStyle='#991b1b';
+    pen.beginPath();
+    if (pen.roundRect) pen.roundRect(x-4,y-height+6,width,height,3); else pen.rect(x-4,y-height+6,width,height);
+    pen.fill();
+    pen.globalAlpha=1; pen.fillStyle='#fff';
+    pen.fillText(text,x,y);
   }
+  const outline = (e, opacity = .3, solid = false) => boxes([box(e)],opacity,solid ? null : [3,3]);
   function drawPart(part, opacity=.32) {
-    const b=part.bounds;
-    element('rect',{ x:b.x,y:b.y,width:b.width,height:b.height,fill:'none',stroke:red,'stroke-width':1,opacity });
-    if (part.baselineApprox!==undefined && Number.isFinite(part.baselineApprox)) {
-      element('line',{ x1:b.x,y1:part.baselineApprox,x2:b.right,y2:part.baselineApprox,stroke:red,'stroke-width':1,'stroke-dasharray':'2 2',opacity });
-    }
+    boxes([part.bounds],opacity);
+    if (Number.isFinite(part.baselineApprox)) line(part.bounds.x,part.baselineApprox,part.bounds.right,part.baselineApprox,opacity,[2,2]);
   }
   function paint(m, findings) {
-    canvas=baseGroup;
-    guides.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
-    // Um path por estilo: desenhar um nó por contorno custa mais que medir a página inteira.
-    const controls=new Set(m.controls);
-    let parts='', baselines='';
-    for (const c of m.internals) for (const p of c.parts) {
-      parts+=rectPath(p.bounds);
-      if (Number.isFinite(p.baselineApprox)) baselines+=`M${round(p.bounds.x)} ${round(p.baselineApprox)}H${round(p.bounds.right)}`;
-    }
-    stroke(m.controls.map(e=>rectPath(box(e))).join(''),.3,'3 3');
+    prepare(baseCanvas);
+    const controls=new Set(m.controls), parts=m.internals.flatMap(c=>c.parts);
     const framed=c=>/^(Card|Superfície|Gráfico|Imagem vetorial|Canvas|Imagem|Vídeo)$/.test(c.type);
-    stroke(m.components.filter(c=>!controls.has(c.element) && !framed(c)).map(c=>rectPath(box(c.element))).join(''),.13,'3 3');
-    stroke(m.components.filter(c=>!controls.has(c.element) && framed(c)).map(c=>rectPath(box(c.element))).join(''),.7,'6 3');
+    boxes(m.controls.map(box),.3,[3,3]);
+    boxes(m.components.filter(c=>!controls.has(c.element) && !framed(c)).map(c=>box(c.element)),.13,[3,3]);
+    boxes(m.components.filter(c=>!controls.has(c.element) && framed(c)).map(c=>box(c.element)),.7,[6,3]);
     // O contorno de um contêiner coincide com a borda dele; a etiqueta no canto diz o que foi reconhecido ali.
     for (const c of m.components) if (/^(Card|Superfície|Gráfico|Canvas)$/.test(c.type)) {
-      const b=box(c.element), width=c.type.length*5.4+8;
-      if (b.width<width+8 || b.height<22) continue;
-      element('rect', { x:round(b.x), y:round(b.y), width, height:14, rx:2, fill:'#991b1b', opacity:.9 });
-      element('text', { x:round(b.x)+4, y:round(b.y)+10.5, fill:'#fff', 'font-family':'ui-monospace,monospace', 'font-size':9 }, c.type);
+      const b=box(c.element);
+      if (b.width>=c.type.length*5.4+16 && b.height>=22) label(Math.round(b.x)+4,Math.round(b.y)+10,c.type,9);
     }
-    stroke(parts,.32);
-    stroke(baselines,.32,'2 2');
-    stroke(findings.map(f=>findingElement.get(f)).filter(e=>e!==document.documentElement).map(e=>rectPath(box(e))).join(''),.85);
+    boxes(parts.map(p=>p.bounds),.32);
+    const baselines=parts.filter(p=>Number.isFinite(p.baselineApprox));
+    if (baselines.length) strokePath(()=>{ for (const p of baselines) { pen.moveTo(p.bounds.x,crisp(p.baselineApprox)); pen.lineTo(p.bounds.right,crisp(p.baselineApprox)); } },.32,[2,2]);
+    boxes(findings.map(f=>findingElement.get(f)).filter(e=>e!==document.documentElement).map(box),.85);
     if (m.sidebar) {
       const b = box(m.sidebar);
       line(b.x, 0, b.x, innerHeight, .35);
@@ -1197,7 +1293,7 @@ function installVisualInspector(options) {
     }
   }
   function paintSelection(m) {
-    canvas=selectionGroup;
+    prepare(selectionCanvas);
     const selected = componentMap.get(hovered);
     if (!selected) return;
     outline(selected.element, 1);
@@ -1419,7 +1515,6 @@ function installVisualInspector(options) {
     const m = measure(), findings = inspectRules(m);
     last = { m, findings };
     promote();
-    baseGroup.replaceChildren();
     if (guidesOn) paint(m, findings);
     touch(true);
     cost = performance.now()-started;
@@ -1429,7 +1524,6 @@ function installVisualInspector(options) {
     if (now!==true) { if (!touchFrame) touchFrame=requestAnimationFrame(()=>touch(true)); return; }
     cancelAnimationFrame(touchFrame); touchFrame=0;
     if (!last) return schedule();
-    selectionGroup.replaceChildren();
     if (guidesOn) paintSelection(last.m);
     if (!panelOn) return;
     if (sheetCount!==document.styleSheets.length) { sheetCount=document.styleSheets.length; contextCache=null; }
@@ -1558,6 +1652,20 @@ function installVisualInspector(options) {
       out.findings.remaining=after.findings.length-out.findings.introduced.length;
       return out;
     },
+    // Percorre a página rolando a janela e junta os achados de cada trecho; devolve a rolagem ao ponto inicial.
+    async scan({ maxScreens=12 }={}) {
+      const start=[scrollX,scrollY], found=new Map(), step=Math.max(1,Math.round(innerHeight*.9));
+      let screens=0, y=0;
+      for (; screens<maxScreens; screens++, y+=step) {
+        scrollTo({ left:start[0], top:y, behavior:'instant' }); // instant ignora o scroll-behavior: smooth da página
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        for (const f of inspectRules(measure())) if (!found.has(f.rule+' '+f.selector)) found.set(f.rule+' '+f.selector,{ ...f, scrollY:Math.round(scrollY) });
+        if (scrollY+innerHeight>=document.documentElement.scrollHeight-1) { screens++; break; }
+      }
+      const complete=scrollY+innerHeight>=document.documentElement.scrollHeight-1;
+      scrollTo({ left:start[0], top:start[1], behavior:'instant' });
+      return { screens, complete, findings:[...found.values()] };
+    },
     // Resumo em texto: uma chamada entrega contexto e achados sem inflar a conversa do agente.
     report({ maxFindings=20 }={}) {
       const m=measure(), c=context(m).data, findings=inspectRules(m), t=c.theme, lines=[];
@@ -1571,6 +1679,8 @@ function installVisualInspector(options) {
       if (loose.length) lines.push((c.tokens.colors.length ? 'Cores em uso sem token: ' : 'Cores em uso: ')+list(loose,10,p=>`${p.hex} ×${p.text+p.background+p.border}`));
       if (c.typography.sizes.length) lines.push(`Tipografia: ${c.typography.families.map(x=>x.value).join(', ')} · tamanhos ${c.typography.sizes.map(x=>x.value).join(', ')} · pesos ${c.typography.weights.map(x=>x.value).join(', ')}`);
       if (c.radii.length) lines.push('Raios: '+c.radii.map(x=>x.value).join(', '));
+      if (c.spacing.length) lines.push('Espaçamentos: '+c.spacing.map(x=>`${x.value} ×${x.count}`).join(', '));
+      if (c.controlHeights.length) lines.push('Alturas de controle: '+c.controlHeights.map(x=>`${x.value} ×${x.count}`).join(', '));
       if (c.components.names.length) lines.push('Componentes: '+list(c.components.names,20,n=>`${n.name} ×${n.count}`));
       if (c.platform.length) lines.push('Web moderna: '+c.platform.map(x=>`${x.pattern} ×${x.count} (busque "${x.query}")`).join('; '));
       lines.push(`Cobertura: ${m.components.length} componentes, ${m.controls.length} controles, ${roots.length-1} shadow roots abertos, somente a área visível`);
@@ -1586,7 +1696,7 @@ function installVisualInspector(options) {
       const sorted=[...groups].sort((a,b)=>order[a[1][0].confidence]-order[b[1][0].confidence]);
       for (const [rule,group] of sorted.slice(0,maxFindings)) {
         const f=group[0];
-        lines.push(`- [${f.confidence}] ${rule}${group.length>1 ? ' ×'+group.length : ''} · ${f.selector}${f.deltaPx===null ? '' : ' · '+f.deltaPx+' px'} · ${f.message}`+(group.length>1 ? ` · também em ${list(group.slice(1),3,x=>x.selector)}` : ''));
+        lines.push(`- [${f.confidence} · ${f.category}] ${rule}${group.length>1 ? ' ×'+group.length : ''} · ${f.selector}${f.deltaPx===null ? '' : ' · '+f.deltaPx+' px'} · ${f.message}`+(group.length>1 ? ` · também em ${list(group.slice(1),3,x=>x.selector)}` : ''));
       }
       if (sorted.length>maxFindings) lines.push(`- e mais ${sorted.length-maxFindings} regras; use VisualInspector.audit().findings`);
       return lines.join('\n');
@@ -1611,6 +1721,8 @@ function installVisualInspector(options) {
   window.VisualInspector=api;
   if (!panelOn) host.style.display='none';
   setTab(tab);
+  // Em tela estreita o painel cobriria metade do conteúdo: começa recolhido ao cabeçalho.
+  if (innerWidth<520) setMinimized(true);
   place(innerWidth,innerHeight);
   draw();
   return api;

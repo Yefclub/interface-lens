@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requer um navegador que o agente consiga controlar ou observar (Playwright, MCP de navegador, extensão ou DevTools). O runtime é JavaScript puro, sem dependências.
 metadata:
   author: Yefclub
-  version: "3.1.0"
+  version: "3.2.0"
 ---
 
 # Interface Lens
@@ -44,6 +44,7 @@ O runtime usa o DOM e não precisa de dependências, framework, servidor remoto 
 VisualInspector.report();       // Texto curto: tecnologias, tema, tokens, componentes e achados
 VisualInspector.context();      // O mesmo contexto em dados
 VisualInspector.audit();        // Achados com seletor único e retângulo
+await VisualInspector.scan();   // Rola a janela e junta os achados da página inteira
 VisualInspector.snapshot();     // Estado serializável para comparar depois
 VisualInspector.diff(antes);    // O que moveu, mudou de tamanho ou de estilo, e os achados resolvidos ou introduzidos
 VisualInspector.refresh();      // Redesenha agora: use depois de mudar a página e antes de uma captura
@@ -66,6 +67,7 @@ Comece por `VisualInspector.report()`. Ele responde, com evidência do DOM e das
 - **Tecnologias**: framework, biblioteca de componentes, sistema de estilo e ícones. Escreva código no idioma que o produto já usa.
 - **Componentes**: nomes expostos pelo framework ou por atributos como `data-slot`. Reaproveite o componente existente antes de criar outro.
 - **Tokens**: cores, raios, espaçamentos e tipografia declarados como propriedades customizadas, com o valor resolvido no tema ativo.
+- **Escala em uso**: tamanhos de fonte, raios, espaçamentos e alturas de controle que a tela realmente usa, por frequência. Um valor novo deveria sair dessa escala.
 - **Temas**: como o produto alterna (classe, atributo, media query, `light-dark()`), qual está ativo, quais existem e onde a escolha é persistida.
 - **Cores em uso sem token**: valores escritos à mão. Uma cor nova quase sempre deveria ser um token existente.
 
@@ -76,8 +78,8 @@ Use os tokens e as medidas reais como fonte dos padrões. Não transforme o tama
 1. Observe o estado sem guias e guarde `VisualInspector.snapshot()`. Liste defeitos concretos e seus efeitos na leitura, hierarquia, consistência ou interação.
 2. Use as guias e o relatório para investigar. Compare o centro da linha, o alvo de clique, a caixa de ícone ou imagem, o desenho e o texto. Um ícone centralizado em um botão que está deslocado na linha ainda é um problema.
 3. Corrija o layout na camada responsável. Prefira um grid compartilhado, alinhamento do contêiner, escala de controle e espaçamento coerentes a compensações locais com `translate` ou padding arbitrário. Use os tokens do produto; não introduza cor, raio ou espaçamento fora da escala existente sem motivo declarado.
-4. Confira conteúdo real, nomes longos, seleção, hover, foco e os estados afetados pela mudança. Quando houver mais de um tema, confira cada um pelo controle do próprio produto. Preserve handlers, navegação, contraste e semântica. Não acione operações pagas, envio ou ações destrutivas para produzir um estado visual.
-5. Inspecione novamente, com e sem guias, no mesmo contexto. `VisualInspector.diff(antes)` mostra se a mudança ficou restrita ao alvo e se algum achado foi introduzido. Corrija os problemas observados antes de concluir.
+4. Confira conteúdo real, nomes longos, seleção, hover, foco e os estados afetados pela mudança. Quando houver mais de um tema, confira cada um pelo controle do próprio produto. Quando a tela for responsiva, repita em uma largura de celular. Preserve handlers, navegação, contraste e semântica. Não acione operações pagas, envio ou ações destrutivas para produzir um estado visual.
+5. Inspecione novamente, com e sem guias, no mesmo contexto. Use `scan()` quando a mudança afeta trechos abaixo da primeira tela. `VisualInspector.diff(antes)` mostra se a mudança ficou restrita ao alvo e se algum achado foi introduzido. Corrija os problemas observados antes de concluir.
 
 **Zero alertas automáticos não permite encerrar a validação.** O relatório cobre hipóteses de geometria, contraste e regras configuradas, somente na área visível e na camada em foco. Peso visual, conteúdo, assimetria de desenho, baseline e uma escolha ruim de composição exigem julgamento. Achados com confiança `candidato` pedem que você olhe; não são defeitos confirmados.
 

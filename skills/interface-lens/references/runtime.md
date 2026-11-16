@@ -11,6 +11,7 @@ O runtime não envia dados nem persiste preferências. Os retornos são locais e
 | `report({ maxFindings })` | Texto curto com tecnologias, tema, tokens, componentes, cobertura e achados. Ponto de partida para o agente. |
 | `context()` | O contexto do produto em dados. Formato abaixo. |
 | `audit()` | `findings`, `coverage`, `focus`, `tolerancePx` e `internals` (partes de texto e ícone de cada controle). `status: "heuristic"` é deliberado. |
+| `scan({ maxScreens })` | Assíncrona. Rola a janela tela a tela, junta os achados de cada trecho (cada um com `scrollY`) e devolve a rolagem ao ponto inicial. Retorna `screens`, `complete` e `findings`. Não alcança contêineres com rolagem própria. |
 | `measurements()` | Componentes, níveis, nome de framework e retângulos em pixels CSS. |
 | `snapshot()` | Rota, viewport, componentes com retângulo e estilo, e achados. É JSON: guarde no agente para sobreviver a recargas. |
 | `diff(antes, depois?)` | `added`, `removed`, `moved`, `resized`, `restyled`, `unchanged` e `findings` (`resolved`, `introduced`, `remaining`). Sem `depois`, compara com o estado atual. |
@@ -29,11 +30,15 @@ Entram como componentes os elementos semânticos, os controles, os blocos de tex
 
 - `Card`: tem borda, raio ou sombra e agrupa mais de um componente. O nome vem do título ou do começo do texto.
 - `Superfície`: pinta um fundo diferente do que está atrás, sem as marcas de card.
+- `Bloco`: caixa pintada sem texto nem controle dentro, como barra de progresso, avatar, esqueleto de carregamento ou barra de gráfico feita com `div`.
+- `Clicável`: responde ao clique (`cursor: pointer`) sem ser botão, link nem ter papel de controle.
 - `Gráfico`: SVG ou canvas de Recharts, ApexCharts, Highcharts, ECharts, Plotly ou Chart.js. Outros gráficos aparecem como `Canvas` ou `Imagem vetorial` (SVG maior que um ícone).
 
 Nas guias, cards, superfícies e gráficos têm contorno mais forte e uma etiqueta com o tipo no canto, porque o contorno coincide com a borda do próprio contêiner.
 
-Um contêiner com o mesmo fundo do que está atrás e sem borda nem sombra não é desenhado para ninguém e fica de fora. O conteúdo de um canvas não é inspecionável; só a caixa dele.
+O papel ARIA vale mais que a tag: `ul[role="menu"]` é um `Menu`, `div[role="radio"]` é uma `Opção`. Listas, figuras, títulos de `h1` a `h6`, regiões e controles declarados por papel (rádio, combobox, item de árvore, conteúdo editável) também entram.
+
+Um contêiner com o mesmo fundo do que está atrás e sem borda nem sombra não é desenhado para ninguém e fica de fora. Blocos e clicáveis são procurados só no que toca a viewport; um elemento posicionado para fora de um contêiner que está fora da tela pode escapar. O conteúdo de um canvas não é inspecionável; só a caixa dele.
 
 ## Modo foco
 
@@ -48,7 +53,7 @@ A decisão vem do teste de ponto do navegador. Para elementos com `pointer-event
 
 ## Achados
 
-Cada achado traz `rule`, `selector` (único no documento), `bounds`, `deltaPx`, `confidence` e `message`.
+Cada achado traz `rule`, `category` (`alinhamento`, `consistência`, `legibilidade`, `layout`, `mídia` ou `acessibilidade`), `selector` (único no documento), `bounds`, `deltaPx`, `confidence` e `message`.
 
 - `medido`: geometria lida diretamente, como um ícone fora do centro da própria caixa.
 - `candidato`: hipótese que pede comparação visual. A referência vem dos irmãos ou de uma recomendação pública, nunca de um tamanho inventado.
@@ -68,6 +73,14 @@ Cada achado traz `rule`, `selector` (único no documento), `bounds`, `deltaPx`, 
 | `alvo-minimo` | Alvo de clique menor que 24×24 px e colado a outro alvo (WCAG 2.2, 2.5.8, com a exceção de espaçamento). Links em linha e alvos ampliados por pseudo-elemento ficam de fora. |
 | `controle-sem-nome` | Controle sem texto, sem `aria-label`, `aria-labelledby` ou `title`, e sem descendente ou conteúdo de slot que o nomeie. |
 | `esquema-nativo` | Tema escuro sem `color-scheme: dark` em `html`. |
+| `quase-igual-altura`, `quase-igual-raio` | Altura de controle ou raio a 1–2 px de um valor que a tela usa pelo menos quatro vezes mais. Diferença pequena costuma ser acidente. |
+| `estouro-horizontal` | Elemento que passa da largura da página e cria rolagem horizontal. |
+| `texto-pequeno` | Texto abaixo de 12 px. Uma ocorrência por tamanho. |
+| `imagem-quebrada`, `imagem-distorcida`, `imagem-sem-alt` | Imagem que não carregou, esticada fora da proporção original ou sem o atributo `alt`. |
+| `campo-sem-rotulo` | Campo sem `label` associado, `aria-label`, `aria-labelledby`, `title` ou `placeholder`. |
+| `clicavel-sem-papel` | Elemento clicável sem papel de botão ou link. |
+| `hierarquia-titulos` | Título que pula níveis em relação ao anterior. |
+| `zoom-bloqueado` | Meta viewport com `user-scalable=no` ou `maximum-scale` abaixo de 2. |
 | `padrao-width`, `padrao-height` | Dimensão declarada em `cohorts`. |
 | `coluna-titulos`, `centro-toolbar`, `altura-toolbar`, `coluna-acoes`, `sombra-prompt` | Regiões declaradas em `selectors` e `requirements`. |
 
@@ -87,6 +100,7 @@ Irmãos são comparados quando o contêiner tem ao menos três filhos visíveis 
 - `tokens`: `total`, `colors`, `radius`, `spacing`, `typography`, `shadow`, `motion`, `other`, `omitted` e `stylesheets` (`read`, `blocked`). Cada cor traz `name`, `value`, `hex` no tema ativo, `format` quando o token guarda só canais, `themed` (muda por tema) e `used` (aparece na tela). As usadas e as que mudam por tema vêm primeiro.
 - `palette`: cores em uso com contagem por papel (`text`, `background`, `border`) e os `tokens` de mesmo valor. Lista vazia em `tokens` indica cor escrita à mão.
 - `typography` e `radii`: famílias, tamanhos, pesos e raios em uso, por frequência.
+- `spacing` e `controlHeights`: paddings e gaps em uso e alturas dos controles, por frequência. É a escala real da tela: um valor novo deveria sair dela.
 - `components`: nomes vindos de React, Vue, Svelte, `data-slot`, `data-component` e elementos customizados, com contagem, origem e um seletor de exemplo.
 - `platform`: padrões feitos à mão que a plataforma web já oferece, com `pattern`, `count` e `query`. Cada `query` serve para `npx modern-web-guidance@latest search "<query>"`. Hoje cobre diálogo sem `<dialog>`, menu, lista ou dica flutuante sem a Popover API e tema alternado sem `color-scheme` nem `light-dark()`.
 - `focus`: o estado do modo foco, como em `audit()`.
