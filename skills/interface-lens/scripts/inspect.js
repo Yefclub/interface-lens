@@ -1110,7 +1110,7 @@ function installVisualInspector(options) {
   // Um halo claro sob o traço mantém a guia legível sobre fundos escuros ou saturados.
   const stroke = (d, opacity, dash) => {
     if (!d) return;
-    element('path', { d, fill:'none', stroke:'#fff', 'stroke-width':3, 'stroke-dasharray':dash || 'none', opacity:opacity*.45 });
+    element('path', { d, fill:'none', stroke:'#fff', 'stroke-width':2.5, 'stroke-dasharray':dash || 'none', opacity:opacity*.35 });
     element('path', { d, fill:'none', stroke:red, 'stroke-width':1, 'stroke-dasharray':dash || 'none', opacity });
   };
   const red = '#ef4444';
