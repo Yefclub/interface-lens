@@ -113,6 +113,21 @@
     const report=VisualInspector.report();
     record('Relatório em texto traz tema, tokens e componentes',/disponíveis .*dark via classe \.dark/.test(report)&&/--foreground #1f2430/.test(report)&&/sem token: .*#b4005a/.test(report)&&/PublishButton ×1/.test(report),report);
 
+    const editedStyle=document.createElement('style');
+    editedStyle.textContent=':root{--fixture-old:#123456}.dark{--fixture-old:#654321}';
+    document.head.append(editedStyle);
+    context();
+    editedStyle.textContent=':root{--fixture-new:#123456}.dark{--fixture-new:#654321}';
+    VisualInspector.refresh();
+    const editedTokens=context().tokens.colors;
+    record('Refresh relê tokens substituídos sem mudar a quantidade de regras',editedTokens.some(t=>t.name==='--fixture-new')&&!editedTokens.some(t=>t.name==='--fixture-old'),editedTokens.filter(t=>t.name.startsWith('--fixture-')));
+    editedStyle.textContent=':root{--fixture-panel:#123456}.dark{--fixture-panel:#654321}';
+    [...panel.querySelectorAll('button')].find(b=>b.textContent==='Atualizar').click();
+    const panelTokens=context().tokens.colors;
+    record('Atualizar do painel relê a folha editada e mostra o token novo',panelTokens.some(t=>t.name==='--fixture-panel')&&!panelTokens.some(t=>t.name==='--fixture-new')&&panel.textContent.includes('--fixture-panel'),panelTokens.filter(t=>t.name.startsWith('--fixture-')));
+    editedStyle.remove();
+    VisualInspector.refresh();
+
     window.visualTestResults={passed:results.every(r=>r.passed),results};
     $('result').textContent=results.map(r=>(r.passed?'PASSOU':'FALHOU')+' — '+r.name).join('\n');
     return window.visualTestResults;

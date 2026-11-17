@@ -1379,7 +1379,7 @@ function installVisualInspector(options) {
       if (loose.length) section(colors.length ? 'Cores sem token' : 'Cores em uso',String(loose.length),h('div',{class:'chips'},loose.slice(0,12).map(p=>h('span',{class:'chip'},swatch(p.hex),p.hex,h('small',{text:'×'+(p.text+p.background+p.border)})))));
       if (c.typography.sizes.length) section('Tipografia',null,h('dl',null,[['Famílias',c.typography.families],['Tamanhos',c.typography.sizes],['Pesos',c.typography.weights]].map(([term,list])=>[h('dt',{text:term}),h('dd',{text:list.map(x=>x.value).join(', ')})])));
       if (c.components.names.length) section('Componentes',String(c.components.total),h('div',{class:'chips'},c.components.names.slice(0,16).map(n=>h('span',{class:'chip',title:[n.via,n.source].filter(Boolean).join(' · ')},n.name,h('small',{text:'×'+n.count})))));
-      sections.push(h('div',{class:'row'},h('button',{class:'text',type:'button',text:'Atualizar',onclick:()=>{ contextCache=null; render(); }})));
+      sections.push(h('div',{class:'row'},h('button',{class:'text',type:'button',text:'Atualizar',onclick:()=>{ scanCache=null; contextCache=null; bodyKey=''; render(); }})));
       return sections;
     } };
   }
@@ -1452,13 +1452,14 @@ function installVisualInspector(options) {
   // continua utilizável quando um <dialog> modal nativo o torna inerte.
   function routed(e) {
     if (!panelOn) return;
+    const path=e.composedPath(), fromPanel=path.includes(host);
     const point=e.changedTouches?.[0] || e;
     const inside=r=>r.width>0 && point.clientX>=r.left && point.clientX<=r.right && point.clientY>=r.top && point.clientY<=r.bottom;
-    if (!inside(host.getBoundingClientRect())) return;
+    if (!fromPanel && !inside(host.getBoundingClientRect())) return;
     e.stopImmediatePropagation();
-    if (!e.composedPath().includes(host)) e.preventDefault();
-    const button=[...shadow.querySelectorAll('button')].find(x=>inside(x.getBoundingClientRect()));
-    const onHead=inside(head.getBoundingClientRect()) && (!button || button===grip);
+    if (!fromPanel) e.preventDefault();
+    const button=fromPanel ? path.find(x=>x instanceof Element && x.matches('button')) : [...shadow.querySelectorAll('button')].find(x=>inside(x.getBoundingClientRect()));
+    const onHead=(fromPanel ? path.includes(head) : inside(head.getBoundingClientRect())) && (!button || button===grip);
     if (e.type==='click') button?.dispatchEvent(new MouseEvent('click'));
     else if (e.type==='pointerdown' && e.button===0 && onHead) startDrag(e);
     else if (e.type==='pointerup') endDrag();
@@ -1594,7 +1595,7 @@ function installVisualInspector(options) {
     // Redesenha agora, sem esperar o próximo quadro: use depois de mudar a página e antes de uma captura.
     refresh() {
       cancelAnimationFrame(frame); clearTimeout(timer); frame=timer=0;
-      contextCache=null;
+      scanCache=null; contextCache=null; bodyKey='';
       draw(true);
       return { components:last.m.components.length, findings:last.findings.length, covered:last.m.focus.covered };
     },
