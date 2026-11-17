@@ -1,0 +1,16 @@
+{
+  "name": "yefclub",
+  "description": "Skills do Yefclub para construir e refinar interfaces",
+  "owner": {
+    "name": "Yefclub"
+  },
+  "plugins": [
+    {
+      "name": "interface-lens",
+      "source": "./",
+      "description": "Refine interfaces com inspeção visual verificável: medidas, achados, tecnologias, tokens e temas do produto",
+      "license": "MIT",
+      "repository": "https://github.com/Yefclub/interface-lens"
+    }
+  ]
+}

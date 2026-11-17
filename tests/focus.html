@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Interface Lens — modo foco</title>
+<style>
+  /* Como em aplicações de página única: body sem altura própria e com overflow, conteúdo em um contêiner fixo. */
+  html, body { margin:0; height:0; overflow:auto; }
+  body { background:#f7f8fa; color:#20242b; font:14px/1.5 system-ui,sans-serif; }
+  #app { position:fixed; inset:0; overflow:auto; padding:32px; }
+  h1 { font-size:24px; }
+  button { height:32px; padding:0 12px; border:1px solid #b9c1cc; border-radius:8px; background:#fff; color:inherit; font:inherit; }
+  .card { position:relative; width:260px; margin:16px 0; padding:16px; border:1px solid #d7dce3; border-radius:8px; background:#fff; }
+  .card a::after { content:""; position:absolute; inset:0; }
+  #clipper { position:static; width:160px; height:32px; margin:16px 0; overflow:hidden; }
+  #escaped { position:absolute; left:320px; top:220px; }
+  .backdrop { position:fixed; inset:0; background:rgba(0,0,0,.5); }
+  .sheet { position:fixed; left:50%; top:50%; width:360px; padding:24px; border-radius:12px; background:#fff; transform:translate(-50%,-50%); }
+  dialog { width:360px; padding:24px; border:0; border-radius:12px; }
+  dialog::backdrop { background:rgba(0,0,0,.5); }
+  #result { white-space:pre-wrap; padding:16px; background:#fff; border:1px solid #d7dce3; }
+</style>
+<div id="app">
+  <main>
+    <h1>Modo foco</h1>
+    <p id="intro">O inspetor deve acompanhar o que a aplicação mostra por cima, não o que ficou atrás.</p>
+    <div class="card"><h3>Card clicável</h3><p id="card-text">O link cobre o card inteiro com um pseudo-elemento transparente.</p><a href="#card">Abrir</a></div>
+    <div id="clipper"><button id="escaped">Fora do recorte</button></div>
+    <button id="page-action">Ação da página</button>
+    <button id="run">Executar testes</button>
+    <p id="result" role="status">Aguardando execução.</p>
+  </main>
+</div>
+<div id="overlay" hidden><div class="backdrop"></div><div class="sheet" role="dialog" aria-labelledby="sheet-title"><h2 id="sheet-title">Editar perfil</h2><p>Modal feito com div e pano de fundo.</p><button id="sheet-save">Salvar</button></div></div>
+<div id="bare" class="sheet" role="dialog" aria-modal="true" aria-label="Sem pano de fundo" hidden><p>Modal declarado, sem pano de fundo pintado.</p><button id="bare-ok">Entendi</button></div>
+<dialog id="native" aria-label="Confirmar exclusão"><p>Excluir o item?</p><button id="native-yes">Excluir</button></dialog>
+<script src="../skills/interface-lens/scripts/inspect.js"></script>
+<script>
+  window.runVisualTests=async function() {
+    const results=[];
+    const $=id=>document.getElementById(id);
+    const record=(name,condition,detail)=>results.push({name,passed:!!condition,detail});
+    const labels=()=>VisualInspector.measurements().components.map(c=>c.label);
+    const sees=text=>labels().some(label=>label.includes(text));
+    const focus=()=>VisualInspector.audit().focus;
+    installVisualInspector();
+
+    record('Conteúdo é visto com body sem altura e com overflow',sees('Ação da página')&&sees('Modo foco'),labels());
+    record('Sobreposição transparente de card clicável não esconde o conteúdo',sees('Card clicável')&&sees('Abrir'),labels());
+    record('Elemento absolute escapa do overflow de ancestral estático',sees('Fora do recorte'));
+    record('Sem camada por cima não há foco declarado',focus().layer===null&&focus().covered===0,focus());
+
+    $('overlay').hidden=false;
+    record('Modal em div com pano de fundo tira a página do foco',sees('Salvar')&&!sees('Ação da página')&&!sees('Card clicável'),labels());
+    record('Camada em foco é nomeada pelo título',focus().layer?.name==='Editar perfil'&&focus().covered>5,focus());
+    record('Relatório informa o foco',/Foco: diálogo “Editar perfil”/.test(VisualInspector.report()));
+    record('Foco desligado volta a ver o que está atrás',VisualInspector.toggleFocus()===false&&sees('Ação da página')&&sees('Salvar'));
+    VisualInspector.toggleFocus();
+    $('overlay').hidden=true;
+
+    $('bare').hidden=false;
+    record('Modal declarado sem pano de fundo também tira a página do foco',sees('Entendi')&&!sees('Ação da página')&&focus().layer?.modal===true,[labels(),focus()]);
+    $('bare').hidden=true;
+
+    $('native').showModal();
+    record('Dialog nativo modal tira a página do foco',sees('Excluir')&&!sees('Ação da página')&&focus().layer?.name==='Confirmar exclusão',[labels(),focus()]);
+    VisualInspector.refresh();
+    const top=id=>{ try { return $(id).matches(':popover-open'); } catch { return true; } };
+    record('Guias e painel sobem para a top layer acima do dialog',top('visual-inspector-guides')&&top('visual-inspector-panel'));
+    $('native').close();
+    record('Fechar a camada devolve a página ao foco',sees('Ação da página')&&focus().layer===null,focus());
+
+    const hints=VisualInspector.context().platform.map(h=>h.query);
+    record('Padrão feito à mão vira sugestão de busca',hints.includes('modal dialog element'),hints);
+    VisualInspector.refresh();
+    window.visualTestResults={passed:results.every(r=>r.passed),results};
+    $('result').textContent=results.map(r=>(r.passed?'PASSOU':'FALHOU')+' — '+r.name).join('\n');
+    return window.visualTestResults;
+  };
+  document.getElementById('run').addEventListener('click',runVisualTests);
+</script>
+</html>
