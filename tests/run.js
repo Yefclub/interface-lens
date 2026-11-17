@@ -27,6 +27,18 @@ async function panelInteraction(page) {
   await page.mouse.click(tab.x, tab.y);
   const clicked = await page.evaluate(() => ({ tab:document.getElementById('visual-inspector-panel').shadowRoot.querySelector('[aria-selected="true"]').id, events:window.pageEvents }));
   record('Clique em uma aba troca a aba sem chegar à aplicação', clicked.tab === 'vi-tab-context' && clicked.events.length === 0, clicked);
+  for (const activation of ['Enter','Space','click']) {
+    await page.evaluate(() => {
+      const root=document.getElementById('visual-inspector-panel').shadowRoot;
+      root.getElementById('vi-tab-inspect').dispatchEvent(new MouseEvent('click'));
+      window.pageEvents=[];
+      root.getElementById('vi-tab-context').focus();
+    });
+    if (activation==='click') await page.evaluate(() => document.getElementById('visual-inspector-panel').shadowRoot.getElementById('vi-tab-context').click());
+    else await page.keyboard.press(activation);
+    const activated=await page.evaluate(() => ({ tab:document.getElementById('visual-inspector-panel').shadowRoot.querySelector('[aria-selected="true"]').id,events:window.pageEvents }));
+    record(`${activation} ativa a aba sem vazar clique para a aplicação`,activated.tab==='vi-tab-context'&&activated.events.length===0,activated);
+  }
   await page.evaluate(() => document.getElementById('visual-inspector-panel').shadowRoot.getElementById('vi-tab-inspect').dispatchEvent(new MouseEvent('click')));
 
   const sample = await page.locator('#sample').boundingBox();
