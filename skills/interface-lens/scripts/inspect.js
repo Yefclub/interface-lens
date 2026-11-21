@@ -11,7 +11,7 @@ function installVisualInspector(options) {
     return null;
   }
   window.VisualInspector?.remove();
-  const VERSION='3.2.0';
+  const VERSION='3.3.0';
   const style=options.mockStyle || null;
   const hooks=options.selectors || {};
   const nameAttributes=options.nameAttributes || [];
@@ -719,10 +719,204 @@ function installVisualInspector(options) {
     }
     return groups;
   }
+  // Linhas do contêiner: barra lateral, navegação, menu, lista e diálogo dividem poucas bordas verticais.
+  // Mede o desenho (texto, ícone, caixa) e agrupa por linha visual, sem depender de tags ou classes iguais.
+  const LINE_CONTAINERS='aside,nav,menu,dialog,[role="navigation"],[role="menu"],[role="listbox"],[role="tree"],[role="dialog"],[role="alertdialog"],[data-sidebar="sidebar"]';
+  const SIDES=['Top','Right','Bottom','Left'];
+  // Caixa é o que se lê como forma: fundo distinto do que está atrás, borda nos quatro lados ou sombra.
+  function drawsBox(e) {
+    if (e.matches('[role="tab"],[role="tablist"],table,thead,tbody,tr,th,td')) return false;
+    const c=computed(e);
+    if (castsShadow(c) || SIDES.every(s=>parseFloat(c[`border${s}Width`])>0 && c[`border${s}Style`]!=='none' && (rgba(c[`border${s}Color`])?.[3] ?? 1)>0)) return true;
+    const bg=rgba(c.backgroundColor);
+    if (!bg || bg[3]<.05) return false;
+    const behind=up(e) ? backdrop(up(e)) : null;
+    return !behind || hex(over(bg,behind))!==hex(behind);
+  }
+  function containerLines(c, tolerance) {
+    const cb=box(c), css=computed(c), rtl=css.direction==='rtl';
+    const left=cb.x+parseFloat(css.borderLeftWidth), right=left+(c.clientWidth || cb.width), width=right-left;
+    // Posições lógicas: s é a distância à borda inicial, e à borda final; em rtl a régua espelha.
+    const place=r=>({ s:rtl ? right-r.right : r.x-left, e:rtl ? r.x-left : right-r.right, w:r.width, top:r.y, bottom:r.bottom });
+    const near=(v,line)=>line!==null && line!==undefined && Math.abs(v-line)<=tolerance;
+    // Um menu ou popover flutuante dentro do contêiner tem as próprias linhas.
+    const elsewhere=e=>{ for (let a=e; a && a!==c; a=a.parentElement) if (a.matches(LINE_CONTAINERS) && (floating(a) || topLayers.has(a))) return true; return false; };
+    // Caixas entre o desenho e o contêiner, da mais externa para a mais interna.
+    const chainOf=e=>{ const chain=[]; for (let a=e; a && a!==c; a=a.parentElement) { const b=box(a); if (b.width<width-4 && b.height<=64 && drawsBox(a)) chain.unshift(a); } return chain; };
+    // Conteúdo centralizado com folga: a linha não se aplica a ele.
+    const centred=(e,span)=>{
+      for (let a=e; a && a!==c; a=a.parentElement) {
+        const s=computed(a), flex=/flex|grid/.test(s.display);
+        if (s.display==='inline' || s.display==='contents') continue;
+        const centre=flex ? /^(center|space-around|space-evenly)$/.test(s.justifyContent) || s.justifyItems==='center' : s.textAlign==='center';
+        return centre && box(a).width-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight)-span>2*tolerance+1;
+      }
+      return false;
+    };
+    const ink=(element,kind,r)=>({ kind, element, ...place(r) });
+    const boxes=new Map(), loose=[];
+    const boxUnit=a=>boxes.get(a) || boxes.set(a,{ kind:'box', element:a, ...place(box(a)), inner:[], nested:new Set(), field:null }).get(a);
+    // O desenho dentro de uma caixa entra nela; uma segunda caixa por dentro (contador, avatar) entra como unidade dela.
+    const put=(element,unit)=>{
+      const chain=chainOf(element);
+      if (!chain.length) { if (unit) loose.push(unit); return null; }
+      const outer=boxUnit(chain[0]);
+      if (chain.length===1) { if (unit) outer.inner.push(unit); }
+      else if (!outer.nested.has(chain[1])) { outer.nested.add(chain[1]); outer.inner.push({ kind:'box', element:chain[1], ...place(box(chain[1])) }); }
+      return outer;
+    };
+    let read=0;
+    const walker=document.createTreeWalker(c,NodeFilter.SHOW_TEXT);
+    while (walker.nextNode() && read<1500) {
+      const node=walker.currentNode, p=node.parentElement;
+      if (!p || !node.textContent.trim() || own(p) || p.closest('script,style,noscript,svg,select,textarea,.sr-only,[aria-hidden="true"]') || elsewhere(p) || !visible(p) || !shown(p)) continue;
+      read++;
+      const range=document.createRange(); range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        const r=clipText(rect,p);
+        if (r.width>1 && r.height>0) put(p,ink(p,'text',r));
+      }
+    }
+    for (const e of c.querySelectorAll('svg,img'+(hooks.icons ? ','+hooks.icons : ''))) {
+      if (e.parentElement?.closest('svg') || e.closest('[aria-hidden="true"]:not(svg)') || elsewhere(e) || !visible(e) || !shown(e)) continue;
+      const b=box(e);
+      if (b.width>=6 && b.width<=64 && b.height<=64) put(e,ink(e,'icon',b));
+    }
+    for (const e of c.querySelectorAll(FIELD+',[role="checkbox"],[role="switch"],[role="radio"]')) {
+      if (elsewhere(e) || !visible(e) || !shown(e)) continue;
+      const b=box(e);
+      if (!chainOf(e).length) { if (b.width<=24 && b.height<=24) loose.push(ink(e,'icon',b)); continue; }
+      const outer=put(e,null);
+      outer.field ||= e;
+    }
+    for (const b of boxes.values()) {
+      b.inner.sort((x,y)=>x.s-y.s);
+      const span=b.inner.length ? width-Math.min(...b.inner.map(u=>u.e))-b.inner[0].s : 0;
+      const f=b.field && computed(b.field);
+      // Campo sem ícone: o conteúdo começa depois da borda e do padding do lado inicial.
+      b.start=f && !b.inner.length ? place(box(b.field)).s+parseFloat(f[rtl ? 'borderRightWidth' : 'borderLeftWidth'])+parseFloat(f[rtl ? 'paddingRight' : 'paddingLeft']) : null;
+      b.centred=f ? f.textAlign==='center' : !!b.inner.length && centred(b.element,span);
+      // Destaque de linha (item ativo, hover): a caixa é a própria linha, e o conteúdo dela segue as colunas.
+      b.wide=b.w>=width*.6;
+      b.highlight=b.wide && !b.field && !b.centred;
+    }
+    const inside=u=>u.s>=-1 && u.e>=-1 && u.top>=cb.y-1 && u.bottom<=cb.bottom+1;
+    const units=[...loose,...boxes.values()].filter(inside).sort((a,b)=>a.top+a.bottom-b.top-b.bottom);
+    const rows=[];
+    for (const u of units) {
+      const cy=(u.top+u.bottom)/2, row=rows.at(-1);
+      if (row && Math.abs(row.cy-cy)<6) row.units.push(u); else rows.push({ cy, units:[u] });
+    }
+    const centre=u=>u.s+u.w/2, endCentre=u=>u.e+u.w/2;
+    // A coluna final só vale para um item separado do resto da linha; texto que termina perto da borda não é coluna.
+    const trailOf=list=>{
+      const last=list.at(-1), prev=list.at(-2);
+      return prev && last.element!==prev.element && !prev.element.contains(last.element) && last.s-(width-prev.e)>6 && last.e<width/4 ? last : null;
+    };
+    for (const row of rows) {
+      const list=row.units.sort((a,b)=>a.s-b.s), first=list[0], last=list.at(-1), boxed=first.kind==='box';
+      const lead=boxed ? first.centred ? null : first.inner[0] || (first.start!==null ? { kind:'text', element:first.element, s:first.start, w:0 } : null) : first;
+      const texts=boxed ? first.inner.filter(u=>u.kind==='text') : list.filter(u=>u.kind==='text');
+      Object.assign(row,{ first, lead,
+        icon:lead && lead.kind!=='text' ? lead : null,
+        label:lead && lead.kind!=='text' ? texts.find(t=>t.s>=lead.s+lead.w-1) || null : null,
+        // A coluna inicial vale para linhas ancoradas no início: rodapés alinhados ao fim e conteúdo centralizado ficam de fora.
+        anchored:first.s<width/3 && !centred(boxed ? first.element.parentElement : first.element,width-last.e-first.s),
+        trail:trailOf(boxed && first.wide && list.length===1 ? first.inner : list) });
+    }
+    const anchored=rows.filter(r=>r.anchored);
+    // Cada posição repetida por duas ou mais linhas visuais é uma linha do contêiner, salvo quando fica a poucos pixels
+    // de uma linha mais usada: aí é um desvio dela. Mais longe que NEAR, o recuo costuma ser hierarquia intencional.
+    const NEAR=8;
+    // Profundidade de lista: item de lista aninhada é outro nível da árvore, mesmo a poucos pixels do pai.
+    const depths=new Map();
+    const depth=e=>{
+      if (!depths.has(e)) { let n=0; for (let a=e; a && a!==c; a=a.parentElement) if (a.matches('li,details,[role="treeitem"],[role="listitem"]')) n++; depths.set(e,n); }
+      return depths.get(e);
+    };
+    const otherLevel=(a,b)=>a>0 && b>0 && a!==b;
+    const groupsOf=items=>{
+      const rest=[...items], groups=[];
+      while (rest.length) {
+        let at=rest[0].v, count=0;
+        for (const {v} of rest) { const n=rest.filter(o=>Math.abs(o.v-v)<=tolerance).length; if (n>count) { at=v; count=n; } }
+        const members=rest.filter(o=>Math.abs(o.v-at)<=tolerance), seen=new Map();
+        for (const m of members) seen.set(m.d,(seen.get(m.d) || 0)+1);
+        groups.push({ at, count, depth:[...seen].sort((a,b)=>b[1]-a[1])[0][0] });
+        for (let i=rest.length-1; i>=0; i--) if (Math.abs(rest[i].v-at)<=tolerance) rest.splice(i,1);
+      }
+      return groups;
+    };
+    const linesOf=items=>{
+      const groups=groupsOf(items);
+      return groups.filter(g=>g.count>=2 && !groups.some(o=>o.count>g.count && Math.abs(o.at-g.at)>tolerance && Math.abs(o.at-g.at)<=NEAR && !otherLevel(o.depth,g.depth)));
+    };
+    const item=(v,u)=>({ v, d:depth(u.element) });
+    const looseRows=anchored.filter(r=>r.first.kind!=='box' && r.lead), labelled=anchored.filter(r=>r.label);
+    // Linha de texto principal: a mais externa das linhas iniciais, o recuo do próprio contêiner.
+    const main=linesOf(looseRows.map(r=>item(r.lead.s,r.lead))).reduce((m,l)=>m===null || l.at<m ? l.at : m,null);
+    // Rótulos depois de ícone formam linhas próprias; o texto sem ícone pode estar na linha de texto ou na dos rótulos.
+    const labels=linesOf(labelled.map(r=>item(r.label.s,r.label)));
+    const starts=linesOf([...looseRows.map(r=>item(r.lead.s,r.lead)),...labelled.map(r=>item(r.label.s,r.label))]);
+    const columns=linesOf(anchored.filter(r=>r.icon).map(r=>item(centre(r.icon),r.icon)));
+    // A linha das caixas vem de controles (campo, botão, avatar); o fundo de um item ativo segue o conteúdo, não vota.
+    const boxLines=linesOf(anchored.filter(r=>r.first.kind==='box' && !r.first.highlight).map(r=>item(r.first.s,r.first)));
+    const trailRows=rows.filter(r=>r.trail);
+    const ends=linesOf(trailRows.map(r=>item(r.trail.e,r.trail))), endColumns=linesOf(trailRows.map(r=>item(endCentre(r.trail),r.trail)));
+    // Sem coluna final repetida, vale o recuo inicial: um contêiner de padding único termina onde começa.
+    let inset=false;
+    if (!ends.length && !endColumns.length && main!==null && trailRows.some(r=>near(r.trail.e,main)) && trailRows.some(r=>!near(r.trail.e,main))) { ends.push({ at:main, depth:0 }); inset=true; }
+    const on=(v,lines)=>lines.some(l=>near(v,l.at));
+    const closest=(v,d,lines)=>{
+      const l=lines.filter(x=>!otherLevel(x.depth,d)).reduce((best,x)=>best===null || Math.abs(x.at-v)<Math.abs(best.at-v) ? x : best,null);
+      return l!==null && Math.abs(l.at-v)<=NEAR ? l.at : null;
+    };
+    const misses=[];
+    const px=v=>`${round(v)} px`;
+    // Acusa só o que está perto de uma linha; options traz as alternativas aceitas, e o desvio é a menor distância a uma delas.
+    const miss=(rule,unit,options,message)=>{
+      const found=options.map(([v,lines])=>{ const l=closest(v,depth(unit.element),lines); return l===null ? null : { v, l, d:Math.abs(v-l) }; }).filter(Boolean);
+      if (!found.length) return;
+      const best=found.reduce((a,b)=>b.d<a.d ? b : a);
+      misses.push({ rule, element:unit.element, delta:best.d, message:message(best) });
+    };
+    const iconOk=icon=>on(icon.s,starts) || on(centre(icon),columns);
+    const checkLabel=r=>{
+      if (r.label && !on(r.label.s,labels)) miss('linha-rotulo',r.label,[[r.label.s,labels]],x=>`O rótulo começa a ${px(x.v)} da borda; os rótulos depois do ícone começam a ${px(x.l)}.`);
+    };
+    for (const r of anchored) {
+      if (r.first.kind==='box') {
+        const b=r.first, content=r.lead;
+        // Duas posições aceitas: a caixa no canto com o conteúdo na linha do texto, ou a própria caixa sobre uma linha.
+        if (content && (content.kind!=='text' ? iconOk(content) : on(content.s,starts))) { if (r.icon) checkLabel(r); continue; }
+        if (on(b.s,starts) || on(b.s,boxLines) || on(centre(b),columns)) continue;
+        miss('linha-caixa',b,[[b.s,[...starts,...boxLines]],[centre(b),columns],...(content ? [[content.s,starts]] : [])],
+          x=>`A caixa começa a ${px(b.s)} da borda${content ? ` e o conteúdo dela a ${px(content.s)}` : ''}; a linha mais próxima está a ${px(x.l)}${x.v===centre(b) ? ' (centro da coluna de ícones)' : ''}.`);
+      } else if (r.icon) {
+        if (iconOk(r.icon)) checkLabel(r);
+        else miss('coluna-icones',r.icon,[[r.icon.s,starts],[centre(r.icon),columns]],
+          x=>`O ícone começa a ${px(r.icon.s)} da borda, com centro a ${px(centre(r.icon))}; a coluna de ícones ${x.v===r.icon.s ? 'começa' : 'tem centro'} a ${px(x.l)}.`);
+      } else if (r.lead && !on(r.lead.s,starts)) {
+        miss('linha-texto',r.lead,[[r.lead.s,starts]],x=>`O conteúdo começa a ${px(x.v)} da borda; a linha de texto mais próxima está a ${px(x.l)}.`);
+      }
+    }
+    for (const r of trailRows) {
+      const t=r.trail;
+      if (on(t.e,ends) || on(endCentre(t),endColumns)) continue;
+      miss('linha-final',t,[[t.e,ends],[endCentre(t),endColumns]],
+        x=>`O item final termina a ${px(t.e)} da borda; ${x.v===t.e ? `a coluna final está a ${px(x.l)}${inset ? ', o mesmo recuo do início' : ''}` : `os itens finais têm centro a ${px(x.l)}`}.`);
+    }
+    const at=lines=>lines.map(l=>l.at);
+    return { element:c, rtl, rows:rows.length, misses, lines:{ text:main, starts:at(starts), labels:at(labels), iconCentres:at(columns), boxes:at(boxLines), ends:inset ? [] : at(ends), endCentres:at(endColumns) } };
+  }
+  function lineContainers(tolerance) {
+    const list=all(LINE_CONTAINERS+(hooks.lines ? ','+hooks.lines : '')+(hooks.sidebar ? ','+hooks.sidebar : ''));
+    return [...new Set(list)].filter(c=>!own(c) && box(c).width>120 && box(c).height>24 && visible(c) && shown(c)).map(c=>containerLines(c,tolerance));
+  }
   const findingElement=new WeakMap();
   const CATEGORY={};
   for (const [category,rules] of Object.entries({
-    alinhamento:'icone-texto-y icone-botao-x icone-botao-y conteudo-botao-x icone-slot-x icone-slot-y componente-linha-y coluna-titulos centro-toolbar coluna-acoes',
+    alinhamento:'icone-texto-y icone-botao-x icone-botao-y conteudo-botao-x icone-slot-x icone-slot-y componente-linha-y linha-texto coluna-icones linha-rotulo linha-caixa linha-final coluna-titulos centro-toolbar coluna-acoes',
     consistência:'ritmo-gap borda-inicial dimensao-irmaos raio-concentrico quase-igual-altura quase-igual-raio altura-toolbar padrao-width padrao-height sombra-prompt esquema-nativo',
     legibilidade:'texto-cortado contraste-texto texto-pequeno',
     layout:'estouro-horizontal',
@@ -792,6 +986,10 @@ function installVisualInspector(options) {
       if (css.alignItems==='center') add('icone-slot-y',e,Math.abs(centerY(icon)-centerY(e)),'O ícone não está no centro vertical da sua caixa.');
       if (css.justifyContent==='center' || css.justifyItems==='center') add('icone-slot-x',e,Math.abs(centerX(icon)-centerX(e)),'O ícone não está no centro horizontal da sua caixa.');
     }
+    // Dentro de barra lateral, menu, lista ou diálogo, as linhas do contêiner substituem a comparação entre irmãos:
+    // elas aceitam o ícone estreito centrado na coluna e o filho sem ícone na linha dos rótulos.
+    m.lines=lineContainers(tolerance);
+    const lined=m.lines.map(l=>l.element);
     // Irmãos repetidos são comparados entre si: a referência é a maioria, nunca um valor fixo.
     for (const {kids,row} of siblingGroups(m,tolerance)) {
       const [start,end]=row ? ['x','right'] : ['y','bottom'];
@@ -801,7 +999,7 @@ function installVisualInspector(options) {
         const heights=kids.map(k=>box(k).height), height=majority(heights,tolerance);
         if (height!==null) kids.forEach((k,i)=>add('dimensao-irmaos',k,Math.abs(heights[i]-height),`Altura de ${round(heights[i])} px; os irmãos da linha medem ${round(height)} px.`,'candidato'));
       }
-      if (!row && spread(kids.map(k=>box(k).x))<=tolerance && kids.every(k=>/^(start|left|-webkit-auto)$/.test(computed(k).textAlign) && computed(k).justifyContent!=='center')) {
+      if (!row && !lined.some(c=>c.contains(kids[0])) && spread(kids.map(k=>box(k).x))<=tolerance && kids.every(k=>/^(start|left|-webkit-auto)$/.test(computed(k).textAlign) && computed(k).justifyContent!=='center')) {
         const starts=kids.map(contentStart), edge=majority(starts.filter(Number.isFinite),tolerance);
         const off=edge===null ? [] : kids.filter((k,i)=>Number.isFinite(starts[i]) && Math.abs(starts[i]-edge)>tolerance);
         if (off.length<=Math.max(1,Math.floor(kids.length/4))) for (const k of off) {
@@ -809,6 +1007,13 @@ function installVisualInspector(options) {
           add('borda-inicial',k,Math.abs(x-edge),`O conteúdo começa em x=${round(x)}; os irmãos começam em x=${round(edge)}.`,'candidato');
         }
       }
+    }
+    // Um elemento dentro de contêineres aninhados (nav dentro de aside) é acusado uma vez só.
+    const flagged=new Set();
+    for (const {misses} of m.lines) for (const x of misses) {
+      if (flagged.has(x.element)) continue;
+      flagged.add(x.element);
+      add(x.rule,x.element,x.delta,x.message,'candidato');
     }
     const clippers=new Set(), pairs=new Map();
     for (const p of m.textParents) {
@@ -1612,7 +1817,8 @@ function installVisualInspector(options) {
     },
     audit() {
       const m=measure();
-      return { status:'heuristic',coverage:{controls:m.controls.length,components:m.components.length,internalParts:m.internals.reduce((n,c)=>n+c.parts.length,0),shadowRoots:roots.length-1,covered:m.focus.covered,frames:m.frames},focus:m.focus,tolerancePx:options.tolerancePx ?? 1, findings:inspectRules(m), typography:'Range mede caixas de texto; baseline e caixa de glifo são estimativas de TextMetrics.',
+      return { status:'heuristic',coverage:{controls:m.controls.length,components:m.components.length,internalParts:m.internals.reduce((n,c)=>n+c.parts.length,0),shadowRoots:roots.length-1,covered:m.focus.covered,frames:m.frames},focus:m.focus,tolerancePx:options.tolerancePx ?? 1, findings:inspectRules(m),
+        lines:m.lines.filter(l=>l.rows>=3).map(l=>({ selector:selector(l.element), name:labelOf(l.element).slice(0,64), rtl:l.rtl, rows:l.rows, ...Object.fromEntries(Object.entries(l.lines).map(([k,v])=>[k,Array.isArray(v) ? v.map(round) : v===null ? null : round(v)])) })), typography:'Range mede caixas de texto; baseline e caixa de glifo são estimativas de TextMetrics.',
         internals:m.internals.map(c=>({ selector:selector(c.element), level:componentMap.get(c.element)?.level,
           parts:c.parts.map(p=>({ type:p.type,text:p.text,level:(componentMap.get(c.element)?.level||0)+1,inferred:!!p.inferred,bounds:p.bounds,baselineApprox:p.baselineApprox,inkTopApprox:p.inkTopApprox,inkBottomApprox:p.inkBottomApprox })) })) };
     },
@@ -1685,6 +1891,11 @@ function installVisualInspector(options) {
       if (c.components.names.length) lines.push('Componentes: '+list(c.components.names,20,n=>`${n.name} ×${n.count}`));
       if (c.platform.length) lines.push('Web moderna: '+c.platform.map(x=>`${x.pattern} ×${x.count} (busque "${x.query}")`).join('; '));
       lines.push(`Cobertura: ${m.components.length} componentes, ${m.controls.length} controles, ${roots.length-1} shadow roots abertos, somente a área visível`);
+      // Linhas do contêiner: os valores que um ajuste deveria seguir, em px a partir da borda inicial.
+      for (const l of m.lines.filter(l=>l.rows>=3).slice(0,6)) {
+        const v=l.lines, part=(name,values)=>values.length ? ` · ${name} ${values.map(round).join(', ')}` : '';
+        lines.push(`Linhas: ${labelOf(l.element).slice(0,40) || l.element.localName} (${selector(l.element)})${v.text===null ? '' : ' · texto '+round(v.text)}${part('rótulos',v.labels)}${part('ícones (centro)',v.iconCentres)}${part('caixas',v.boxes)}${part('final',v.ends)}${part('final (centro)',v.endCentres)}`);
+      }
       if (!m.focus.on) lines.push('Foco: desligado; elementos cobertos por outras camadas entram na inspeção');
       else if (m.focus.covered) lines.push(`Foco: ${m.focus.layer ? `diálogo${m.focus.layer.name ? ' “'+m.focus.layer.name+'”' : ''} (${m.focus.layer.selector})` : 'camadas da frente'}; ${m.focus.covered} elementos cobertos ficaram de fora`);
       if (m.frames) lines.push(`Frames: ${m.frames} de mesma origem sem inspeção; injete o inspetor dentro do frame`);

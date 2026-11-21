@@ -10,7 +10,7 @@ O runtime não envia dados nem persiste preferências. Os retornos são locais e
 | --- | --- |
 | `report({ maxFindings })` | Texto curto com tecnologias, tema, tokens, componentes, cobertura e achados. Ponto de partida para o agente. |
 | `context()` | O contexto do produto em dados. Formato abaixo. |
-| `audit()` | `findings`, `coverage`, `focus`, `tolerancePx` e `internals` (partes de texto e ícone de cada controle). `status: "heuristic"` é deliberado. |
+| `audit()` | `findings`, `coverage`, `focus`, `tolerancePx`, `lines` (as linhas de cada contêiner, abaixo) e `internals` (partes de texto e ícone de cada controle). `status: "heuristic"` é deliberado. |
 | `scan({ maxScreens })` | Assíncrona. Rola a janela tela a tela, junta os achados de cada trecho (cada um com `scrollY`) e devolve a rolagem ao ponto inicial. Retorna `screens`, `complete` e `findings`. Não alcança contêineres com rolagem própria. |
 | `measurements()` | Componentes, níveis, nome de framework e retângulos em pixels CSS. |
 | `snapshot()` | Rota, viewport, componentes com retângulo e estilo, e achados. É JSON: guarde no agente para sobreviver a recargas. |
@@ -65,7 +65,8 @@ Cada achado traz `rule`, `category` (`alinhamento`, `consistência`, `legibilida
 | `icone-slot-x`, `icone-slot-y` | Ícone dentro de uma caixa flex ou grid centralizada. |
 | `componente-linha-y` | Componente fora do eixo de uma linha flex centralizada. |
 | `ritmo-gap` | Espaço entre irmãos repetidos, contra o espaço da maioria. |
-| `borda-inicial` | Onde o conteúdo começa em irmãos empilhados. |
+| `borda-inicial` | Onde o conteúdo começa em irmãos empilhados, fora dos contêineres de linhas. |
+| `linha-texto`, `coluna-icones`, `linha-rotulo`, `linha-caixa`, `linha-final` | Bordas compartilhadas dentro de barra lateral, navegação, menu, lista e diálogo. Veja [Linhas do contêiner](#linhas-do-contêiner). |
 | `dimensao-irmaos` | Altura de controles irmãos na mesma linha. |
 | `raio-concentrico` | Raio interno contra o raio do contêiner menos o recuo, quando o filho está na zona da curva. |
 | `texto-cortado` | Texto escondido por `overflow` sem reticências nem `line-clamp`. |
@@ -85,6 +86,22 @@ Cada achado traz `rule`, `category` (`alinhamento`, `consistência`, `legibilida
 | `coluna-titulos`, `centro-toolbar`, `altura-toolbar`, `coluna-acoes`, `sombra-prompt` | Regiões declaradas em `selectors` e `requirements`. |
 
 Irmãos são comparados quando o contêiner tem ao menos três filhos visíveis da mesma tag, em uma única linha ou coluna; `div` e `span` também precisam ter as mesmas classes. Só há referência quando a maioria concorda.
+
+### Linhas do contêiner
+
+Em `aside`, `nav`, `menu`, `dialog`, nos papéis `navigation`, `menu`, `listbox`, `tree`, `dialog` e `alertdialog`, e no sidebar do shadcn/ui (`[data-sidebar="sidebar"]`), o runtime mede o desenho e não a caixa: o começo do texto, o retângulo do ícone e, para controles que pintam uma forma (fundo, borda nos quatro lados ou sombra), a própria caixa. Agrupa o que está na mesma altura em linhas visuais e compara as bordas entre elas, sem exigir tags ou classes iguais. As distâncias são contadas a partir da borda interna do contêiner, sem a barra de rolagem; em `direction: rtl` a régua espelha.
+
+- `linha-texto`: o primeiro texto da linha fora da linha de texto do contêiner. O texto sem ícone pode estar na linha dos rótulos, como o filho sem ícone de um item aninhado.
+- `coluna-icones`: o ícone não começa em uma linha de texto nem tem o centro na coluna dos ícones. Ícones de larguras diferentes centrados na mesma coluna estão certos.
+- `linha-rotulo`: o rótulo depois do ícone fora da linha dos rótulos.
+- `linha-caixa`: nem a caixa nem o conteúdo dela estão em uma linha. São aceitas a caixa encostada no canto com o conteúdo na linha do texto, a caixa sobre uma linha e o avatar centrado na coluna dos ícones. O fundo de um item ativo segue o conteúdo e não define a linha das caixas.
+- `linha-final`: o item separado no fim da linha (contador, atalho, ação) fora da coluna final, pela borda ou pelo centro. Sem coluna final repetida, vale o mesmo recuo do início.
+
+Uma posição usada por duas ou mais linhas visuais é uma linha do contêiner. Um desvio é acusado quando fica a até 8 px de uma linha mais usada; mais longe que isso, o recuo costuma ser hierarquia intencional. Itens de lista em profundidades diferentes (`li`, `details`, `treeitem`) são níveis próprios, mesmo a poucos pixels do pai. Linhas ancoradas no fim, como um rodapé de ações, e conteúdo centralizado ficam fora da coluna inicial. Um menu ou popover flutuante dentro do contêiner tem as próprias linhas.
+
+`audit().lines` traz, para cada contêiner com três ou mais linhas visuais, `selector`, `name`, `rtl`, `rows` e as posições em px: `text` (a linha de texto mais externa), `starts`, `labels`, `iconCentres`, `boxes`, `ends` e `endCentres`. `report()` resume as mesmas linhas. Ao corrigir, mova o item que está fora, não a maioria, e ajuste o padding do contêiner ou uma variável compartilhada; uma margem em um item só falha no próximo item adicionado.
+
+As regras seguem o exercício de linhas de guia do [gridlines](https://github.com/pritamux/gridlines), de Pritam Paul (MIT).
 
 `report()` agrupa os achados por regra: uma linha com o primeiro alvo, a contagem e mais três seletores. A lista completa fica em `audit().findings`.
 
@@ -158,6 +175,7 @@ Opções adicionais, conforme necessidade:
 - `selectors.scope`: prefixo de seletor para localizar controles na região correta.
 - `selectors.actions`, `selectors.headerActions`: ações que devem compartilhar um eixo horizontal.
 - `selectors.rail`: navegação lateral cuja linha central deve ser desenhada.
+- `selectors.lines`: contêineres sem semântica cujas linhas devem ser comparadas, por exemplo `'[data-panel]'`. `selectors.sidebar` também entra.
 - `selectors.icons`: hosts de ícones adicionais aos elementos `svg` e `img`.
 - `labelForRow(row)`: resolve o elemento de texto quando um seletor não basta.
 - `toolbarRoot(composer)`: resolve o contêiner real da barra, preservando os botões condicionais que ela contém.
