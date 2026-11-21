@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requer um navegador que o agente consiga controlar ou observar (Playwright, MCP de navegador, extensão ou DevTools). O runtime é JavaScript puro, sem dependências.
 metadata:
   author: Yefclub
-  version: "3.2.0"
+  version: "3.3.0"
 ---
 
 # Interface Lens
@@ -76,7 +76,7 @@ Use os tokens e as medidas reais como fonte dos padrões. Não transforme o tama
 ## Corrigir a interface
 
 1. Observe o estado sem guias e guarde `VisualInspector.snapshot()`. Liste defeitos concretos e seus efeitos na leitura, hierarquia, consistência ou interação.
-2. Use as guias e o relatório para investigar. Compare o centro da linha, o alvo de clique, a caixa de ícone ou imagem, o desenho e o texto. Um ícone centralizado em um botão que está deslocado na linha ainda é um problema.
+2. Use as guias e o relatório para investigar. Compare o centro da linha, o alvo de clique, a caixa de ícone ou imagem, o desenho e o texto. Um ícone centralizado em um botão que está deslocado na linha ainda é um problema. Em barras laterais, menus, listas e diálogos, `report()` e `audit().lines` mostram as linhas do contêiner: texto, rótulos, coluna de ícones, caixas e coluna final. Mova o item que está fora da linha, não a maioria.
 3. Corrija o layout na camada responsável. Prefira um grid compartilhado, alinhamento do contêiner, escala de controle e espaçamento coerentes a compensações locais com `translate` ou padding arbitrário. Use os tokens do produto; não introduza cor, raio ou espaçamento fora da escala existente sem motivo declarado.
 4. Confira conteúdo real, nomes longos, seleção, hover, foco e os estados afetados pela mudança. Quando houver mais de um tema, confira cada um pelo controle do próprio produto. Quando a tela for responsiva, repita em uma largura de celular. Preserve handlers, navegação, contraste e semântica. Não acione operações pagas, envio ou ações destrutivas para produzir um estado visual.
 5. Inspecione novamente, com e sem guias, no mesmo contexto. Use `scan()` quando a mudança afeta trechos abaixo da primeira tela. `VisualInspector.diff(antes)` mostra se a mudança ficou restrita ao alvo e se algum achado foi introduzido. Corrija os problemas observados antes de concluir.

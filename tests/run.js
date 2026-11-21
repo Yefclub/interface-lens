@@ -103,6 +103,36 @@ async function panelUnderModal(page) {
   return results;
 }
 
+// Linhas do contêiner em largura de celular e em uma lista longa, com um desvio plantado e o custo medido.
+async function linesAtScale(page, base) {
+  const results = [];
+  const record = (name, passed, detail) => results.push({ name, passed:!!passed, detail });
+  const LINE = ['linha-texto','coluna-icones','linha-rotulo','linha-caixa','linha-final'];
+  await page.setViewportSize({ width:390, height:844 });
+  await page.goto(base + 'lines.html');
+  const narrow = await page.evaluate(LINE => { VisualInspector.refresh(); return VisualInspector.audit().findings.filter(f => LINE.includes(f.rule)); }, LINE);
+  record('Linhas alinhadas em 390 px sem achados', narrow.length === 0, narrow);
+  const shifted = await page.evaluate(() => { document.getElementById('sec1').style.paddingLeft='15px'; return VisualInspector.audit().findings.map(f => f.rule + ' ' + f.deltaPx); });
+  record('Desvio acusado em 390 px', shifted.length === 1 && shifted[0] === 'linha-texto 3', shifted);
+  await page.setViewportSize({ width:1280, height:800 });
+
+  const row = (i, extra='') => `<li><a href="#" style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px${extra}"><svg width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16"/></svg><span>Item ${i}</span><span style="margin-left:auto;width:24px;text-align:center;border-radius:9px;background:#e3e7ee">${i % 90}</span></a></li>`;
+  const list = Array.from({ length:3000 }, (_, i) => row(i, i === 12 ? ';padding-left:15px' : '')).join('');
+  await page.goto(base + 'lines.html');
+  await page.evaluate(list => {
+    VisualInspector.remove();
+    document.body.innerHTML = `<nav aria-label="Lista longa" style="position:fixed;left:0;top:0;bottom:0;width:260px;overflow:auto;font:14px Arial"><ul style="margin:0;padding:0;list-style:none">${list}</ul></nav>`;
+    installVisualInspector({ panel:false });
+  }, list);
+  const timed = await page.evaluate(LINE => {
+    const start = performance.now(), audit = VisualInspector.audit(), ms = performance.now() - start;
+    return { ms:Math.round(ms), findings:audit.findings.filter(f => LINE.includes(f.rule)).map(f => ({ rule:f.rule, delta:f.deltaPx, component:f.component })) };
+  }, LINE);
+  record('Lista de 3000 linhas: desvio plantado acusado sem falso positivo', timed.findings.length === 1 && timed.findings[0].rule === 'coluna-icones' && timed.findings[0].delta === 3, timed);
+  record(`Lista de 3000 linhas auditada em ${timed.ms} ms`, timed.ms < 4000, timed.ms);
+  return results;
+}
+
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}/tests/`;
@@ -118,10 +148,11 @@ async function panelUnderModal(page) {
       if (!r.passed) { failed++; if (r.detail !== undefined) console.log('         ' + JSON.stringify(r.detail)); }
     }
   };
-  for (const file of ['browser.html', 'context.html', 'focus.html']) {
+  for (const file of ['browser.html', 'context.html', 'focus.html', 'lines.html']) {
     await page.goto(base + file);
     print(file, (await page.evaluate(() => window.runVisualTests())).results);
   }
+  print('linhas em escala', await linesAtScale(page, base));
   await page.goto(base + 'browser.html');
   print('interação com o painel', await panelInteraction(page));
   await page.goto(base + 'focus.html');

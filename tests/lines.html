@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Interface Lens — linhas do contêiner</title>
+<style>
+  html, body { margin:0; }
+  body { background:#fff; color:#20242b; font:14px/20px Arial,sans-serif; }
+  svg { display:block; width:16px; height:16px; flex:none; }
+  button, input { font:inherit; color:inherit; }
+  ul { margin:0; padding:0; list-style:none; }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+  /* Barra lateral: texto e ícones a 12 px, rótulos a 36 px, caixas a 8 px, coluna final a 12 px com centro a 24 px. */
+  #side { position:fixed; left:0; top:0; bottom:0; width:240px; box-sizing:border-box; padding:8px 0; overflow-y:scroll; background:#f4f5f7; border-right:1px solid #dde1e6; }
+  .row { display:flex; align-items:center; gap:8px; min-height:32px; margin:0 4px; padding:0 8px; border:0; border-radius:6px; background:transparent; text-decoration:none; text-align:start; }
+  button.row { width:calc(100% - 8px); }
+  .row.active { background:#e3e7ee; }
+  .count { margin-inline-start:auto; width:24px; border-radius:10px; background:#dfe3ea; text-align:center; font-size:12px; line-height:20px; }
+  .more { display:grid; place-items:center; width:28px; height:28px; margin-inline:auto -2px; padding:0; border:0; background:transparent; }
+  .chevron { margin-inline-start:auto; }
+  .avatar { display:grid; place-items:center; width:24px; height:24px; margin-inline-start:-4px; border-radius:6px; background:#4f5fd8; color:#fff; font-size:12px; flex:none; }
+  #ws { gap:4px; }
+  .search { display:flex; align-items:center; gap:8px; height:32px; margin:4px 8px; padding:0 3px; border:1px solid #b9c1cc; border-radius:6px; background:#fff; }
+  .search input { flex:1; min-width:0; height:24px; padding:0; border:0; background:transparent; outline:0; }
+  .dot { width:12px; height:12px; margin:0 2px; }
+  .wrap { max-width:150px; padding-block:6px; }
+  .section { padding:12px 12px 4px; color:#4b5260; font-size:12px; line-height:16px; }
+  .child { padding-inline-start:32px; }
+  .child.bare { padding-inline-start:56px; }
+  .empty { margin:8px 12px; color:#4b5260; text-align:center; }
+  .upgrade { display:flex; justify-content:center; align-items:center; width:calc(100% - 16px); height:32px; margin:8px; border:0; border-radius:6px; background:#20242b; color:#fff; }
+  #float { position:fixed; left:8px; top:640px; width:200px; padding:4px 0; border:1px solid #c9ced6; border-radius:8px; background:#fff; }
+  #float [role="menuitem"] { padding:4px 0 4px 55px; }
+
+  /* Menu com coluna de marcação: marca a 8 px, rótulos a 30 px, atalhos terminando a 8 px. */
+  #menu { position:fixed; left:300px; top:16px; width:220px; box-sizing:border-box; padding:4px 0; border:1px solid #c9ced6; border-radius:8px; background:#fff; }
+  #menu [role^="menuitem"] { display:flex; align-items:center; gap:8px; height:28px; padding:0 8px; }
+  #menu svg { width:14px; height:14px; }
+  #menu .plain { padding-inline-start:30px; }
+  .kbd { margin-inline-start:auto; padding:0 4px; border-radius:4px; background:#eceff3; font-size:12px; line-height:18px; }
+  #menu hr { margin:4px 0; border:0; border-top:1px solid #dde1e6; }
+
+  /* Árvore só de texto com degraus de 8 px por nível. */
+  #tree { position:fixed; left:300px; top:200px; width:220px; }
+  #tree h3 { margin:0; padding-inline-start:12px; font-size:14px; line-height:28px; }
+  #tree a { display:block; line-height:28px; color:inherit; text-decoration:none; }
+  .l1 > a { padding-inline-start:12px; }
+  .l2 > a { padding-inline-start:20px; }
+  .l3 > a { padding-inline-start:28px; }
+
+  /* Diálogo: conteúdo a 24 px; campos com a caixa na linha e o texto recuado; ações no fim. */
+  #dlg { position:fixed; left:560px; top:16px; width:400px; box-sizing:border-box; margin:0; padding:24px; border:1px solid #c9ced6; border-radius:12px; background:#fff; }
+  #dlg h2 { margin:0 0 8px; font-size:18px; line-height:28px; }
+  #dlg p { margin:0 0 12px; }
+  #dlg label { display:block; margin-bottom:4px; }
+  #dlg input { display:block; width:100%; box-sizing:border-box; height:32px; margin-bottom:12px; padding:0 8px; border:1px solid #8a93a1; border-radius:6px; background:#fff; }
+  .close { position:absolute; top:24px; right:18px; display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; background:transparent; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .actions { display:flex; justify-content:flex-end; gap:8px; }
+  .actions button { height:32px; padding:0 12px; border:1px solid #8a93a1; border-radius:6px; background:#fff; }
+  .actions .primary { border-color:#20242b; background:#20242b; color:#fff; }
+
+  #rtl { position:fixed; left:560px; top:470px; width:240px; box-sizing:border-box; padding:8px 0; background:#f4f5f7; }
+  #plain { position:fixed; left:820px; top:470px; width:200px; padding:8px 0; background:#f4f5f7; }
+  #top { position:fixed; left:560px; top:720px; display:flex; gap:24px; padding:8px 16px; }
+  #top a { color:inherit; }
+  #panel { position:fixed; left:1040px; top:16px; width:220px; }
+  #result { max-height:200px; overflow:auto; margin:8px 0 0; white-space:pre-wrap; font-size:12px; line-height:16px; }
+</style>
+
+<aside id="side" aria-label="Lateral">
+  <button id="ws" class="row"><span class="avatar">A</span><span>Acme</span></button>
+  <label class="search" id="search"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="7" cy="7" r="5"/></svg><input aria-label="Buscar" placeholder="Buscar"></label>
+  <ul>
+    <li><a href="#" id="home" class="row active"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span id="home-label">Início</span><span class="count">3</span></a></li>
+    <li><a href="#" id="inbox" class="row"><svg id="inbox-icon" viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span id="inbox-label">Caixa de entrada</span><span class="count" id="inbox-count">12</span></a></li>
+    <li><span id="drafts" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>Rascunhos</span><button class="more" id="more" aria-label="Mais ações"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2" fill="#6b7280"/></svg></button></span></li>
+    <li><a href="#" id="archive" class="row"><svg class="dot" id="dot" viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="#6b7280"/></svg><span>Arquivo</span></a></li>
+    <li><a href="#" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span class="wrap">Uma etiqueta longa que quebra em duas linhas</span></a></li>
+  </ul>
+  <div class="section" id="sec1">Espaço de trabalho</div>
+  <ul>
+    <li><a href="#" id="projects" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>Projetos</span><svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="#6b7280"><path d="m4 6 4 4 4-4"/></svg></a>
+      <ul>
+        <li><a href="#" id="child1" class="row child"><svg id="child1-icon" viewBox="0 0 16 16"><rect width="16" height="16" fill="#9aa1ad"/></svg><span id="child1-label">Site</span></a></li>
+        <li><a href="#" class="row child"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#9aa1ad"/></svg><span>Aplicativo</span></a></li>
+        <li><a href="#" class="row child"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#9aa1ad"/></svg><span>Marca</span></a></li>
+        <li><a href="#" id="child-bare" class="row child bare">Sem ícone</a></li>
+      </ul>
+    </li>
+  </ul>
+  <div class="section" id="sec2">Arquivados</div>
+  <p class="empty">Nada arquivado</p>
+  <a href="#" class="row" style="display:none;padding-left:30px">Oculto</a>
+  <div aria-hidden="true" style="padding-left:17px">Decorativo</div>
+  <span class="sr-only">Somente para leitores de tela</span>
+  <button class="upgrade" id="upgrade">Atualizar plano</button>
+  <div role="menu" id="float" aria-label="Menu flutuante"><div role="menuitem">Renomear</div><div role="menuitem">Mover</div><div role="menuitem">Excluir</div></div>
+</aside>
+
+<div role="menu" id="menu" aria-label="Formatação">
+  <div role="menuitemcheckbox" aria-checked="true" id="bold"><svg viewBox="0 0 14 14" fill="none" stroke="#20242b"><path d="m2 7 3 3 7-7"/></svg><span>Negrito</span><span class="kbd" id="bold-kbd">⌘B</span></div>
+  <div role="menuitemcheckbox" aria-checked="false" class="plain" id="italic">Itálico<span class="kbd">⌘I</span></div>
+  <div role="menuitemcheckbox" aria-checked="true"><svg viewBox="0 0 14 14" fill="none" stroke="#20242b"><path d="m2 7 3 3 7-7"/></svg><span>Sublinhado</span><span class="kbd">⌘U</span></div>
+  <hr>
+  <div role="menuitem" class="plain">Limpar formatação</div>
+</div>
+
+<nav id="tree" aria-label="Árvore">
+  <h3 id="tree-title">Sumário</h3>
+  <ul>
+    <li class="l1" id="t-intro"><a href="#" id="t-intro-link">Introdução</a></li>
+    <li class="l1"><a href="#">Guias</a>
+      <ul>
+        <li class="l2"><a href="#">Instalação</a></li>
+        <li class="l2"><a href="#" id="t-config">Configuração</a>
+          <ul><li class="l3"><a href="#">Temas</a></li><li class="l3"><a href="#">Plugins</a></li></ul>
+        </li>
+        <li class="l2"><a href="#">Implantação</a></li>
+        <li class="l2"><a href="#">Testes</a></li>
+      </ul>
+    </li>
+    <li class="l1"><a href="#">Referência</a></li>
+  </ul>
+</nav>
+
+<dialog id="dlg" open aria-label="Editar perfil">
+  <h2 id="dlg-title">Editar perfil</h2>
+  <button class="close" id="close" aria-label="Fechar"><svg viewBox="0 0 16 16" fill="none" stroke="#20242b"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+  <p>As alterações valem para todos os espaços de trabalho em que você participa.</p>
+  <label for="name">Nome</label><input id="name" value="Ana">
+  <div class="pair"><label for="city">Cidade</label><label for="uf">UF</label></div>
+  <div class="pair"><input id="city" value="Recife"><input id="uf" value="PE"></div>
+  <div class="actions"><button id="cancel">Cancelar</button><button class="primary" id="save">Salvar</button></div>
+</dialog>
+
+<aside id="rtl" dir="rtl" aria-label="Lateral rtl">
+  <div class="section" id="rtl-sec">مساحة العمل</div>
+  <a href="#" class="row"><svg id="rtl-icon" viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>البريد</span><span class="count">4</span></a>
+  <a href="#" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>المهام</span><span class="count">9</span></a>
+  <a href="#" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>الملفات</span></a>
+  <a href="#" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>الإعدادات</span></a>
+</aside>
+
+<div id="plain">
+  <div class="section" id="plain-sec" style="padding-left:15px">Equipe</div>
+  <a href="#" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>Pessoas</span></a>
+  <a href="#" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>Times</span></a>
+  <a href="#" class="row"><svg viewBox="0 0 16 16"><rect width="16" height="16" fill="#6b7280"/></svg><span>Convites</span></a>
+</div>
+
+<nav id="top" aria-label="Principal"><a href="#">Produto</a><a href="#">Preços</a><a href="#">Clientes</a><a href="#">Contato</a></nav>
+
+<div id="panel"><button id="run">Executar testes</button><p id="result" role="status">Aguardando execução.</p></div>
+
+<script src="../skills/interface-lens/scripts/inspect.js"></script>
+<script>
+  window.runVisualTests=async function() {
+    const results=[];
+    const $=id=>document.getElementById(id);
+    const setup=extra=>installVisualInspector({panel:false,...extra});
+    setup();
+    const record=(name,condition,detail)=>results.push({name,passed:!!condition,detail});
+    const LINE=['linha-texto','coluna-icones','linha-rotulo','linha-caixa','linha-final'];
+    const audit=()=>VisualInspector.audit();
+    const lineFindings=()=>audit().findings.filter(f=>LINE.includes(f.rule));
+    // O alvo do achado é conferido pelo elemento, não pelo texto do seletor.
+    const at=(f,e)=>{ try { return document.querySelector(f.selector)===e; } catch { return false; } };
+    const only=(rule,e,delta)=>{ const list=lineFindings(); return list.length===1 && list[0].rule===rule && at(list[0],e) && Math.abs(list[0].deltaPx-delta)<=.5 ? true : list; };
+    // Provoca, mede e restaura; depois confere que o achado sumiu.
+    async function provoke(name, e, prop, value, rule, target, delta) {
+      const before=e.style[prop];
+      e.style[prop]=value;
+      const outcome=only(rule,target,delta);
+      record(name,outcome===true,outcome===true ? undefined : outcome);
+      e.style[prop]=before;
+    }
+    const lines=selector=>audit().lines.find(l=>document.querySelector(l.selector)===$(selector));
+
+    const clean=audit().findings;
+    record('Estado alinhado sem achados',clean.length===0,clean);
+    const side=lines('side');
+    record('Linhas da barra lateral medidas pelo desenho',side && side.text===12 && side.starts.includes(12) && side.starts.includes(36) && side.starts.includes(60) && side.labels.includes(36) && side.labels.includes(60) && side.iconCentres.includes(20) && side.iconCentres.includes(44) && side.boxes.includes(8) && side.ends.includes(12) && side.endCentres.includes(24),side);
+    record('Barra de rolagem fica fora da medida da borda final',side?.ends.includes(12));
+    const menu=lines('menu');
+    record('Linhas do menu medidas',menu && menu.starts.includes(8) && menu.starts.includes(30) && menu.labels.includes(30) && menu.ends.includes(8),menu);
+    const dialog=lines('dlg');
+    record('Linhas do diálogo medidas',dialog && dialog.text===24 && dialog.ends.includes(24),dialog);
+    record('Contêiner de uma linha só não entra no resumo',!lines('top'));
+    record('Relatório resume as linhas',/Linhas: .*Lateral.*texto 12/.test(VisualInspector.report()),VisualInspector.report().split('\n').filter(l=>l.startsWith('Linhas')));
+
+    await provoke('Cabeçalho de seção 3 px fora da linha de texto',$('sec1'),'paddingLeft','15px','linha-texto',$('sec1'),3);
+    await provoke('Rótulo 2 px fora da linha dos rótulos',$('inbox-label'),'marginLeft','2px','linha-rotulo',$('inbox-label'),2);
+    $('inbox-label').style.marginLeft='1px';
+    record('Desvio de 1 px fica dentro da tolerância',lineFindings().length===0,lineFindings());
+    $('inbox-label').style.marginLeft='';
+    await provoke('Ícone 3 px fora da coluna',$('inbox-icon'),'marginLeft','3px','coluna-icones',$('inbox-icon'),3);
+    record('Ícone estreito centralizado na coluna não é acusado',lineFindings().length===0);
+    await provoke('Ícone estreito alinhado à esquerda desloca o rótulo',$('dot'),'margin','0','linha-rotulo',$('archive').querySelector('span'),4);
+    await provoke('Contador 2 px antes da coluna final',$('inbox-count'),'marginRight','2px','linha-final',$('inbox-count'),2);
+    await provoke('Botão final de outra largura 3 px fora do centro da coluna',$('more'),'marginRight','1px','linha-final',$('more').firstElementChild,3);
+    await provoke('Caixa com o conteúdo fora da linha',$('home'),'paddingLeft','12px','linha-caixa',$('home'),4);
+    $('home').style.marginLeft='12px'; $('home').style.paddingLeft='8px';
+    record('Caixa sobre a linha de texto, com o conteúdo recuado, é aceita',lineFindings().length===0,lineFindings());
+    $('home').style.marginLeft=$('home').style.paddingLeft='';
+    await provoke('Avatar 3 px fora da coluna de ícones',$('ws').firstElementChild,'marginLeft','-7px','linha-caixa',$('ws').firstElementChild,3);
+    await provoke('Ícone de item aninhado 3 px fora da coluna do nível',$('child1-icon'),'marginLeft','3px','coluna-icones',$('child1-icon'),3);
+    await provoke('Rótulo de item aninhado 2 px fora',$('child1-label'),'marginLeft','2px','linha-rotulo',$('child1-label'),2);
+    $('sec1').style.paddingLeft='0px';
+    record('Recuo distante, de hierarquia, não é acusado',lineFindings().length===0,lineFindings());
+    $('sec1').style.paddingLeft='';
+    $('sec1').style.paddingLeft=$('sec2').style.paddingLeft='15px';
+    const repeated=lineFindings();
+    record('Desvio repetido em todos os cabeçalhos é acusado',repeated.length===2 && repeated.every(f=>f.rule==='linha-texto' && f.deltaPx===3),repeated);
+    $('sec1').style.paddingLeft=$('sec2').style.paddingLeft='';
+
+    await provoke('Item sem marca 3 px fora da linha dos rótulos do menu',$('italic'),'paddingLeft','33px','linha-texto',$('italic'),3);
+    await provoke('Atalho 2 px antes da coluna final do menu',$('bold-kbd'),'marginRight','2px','linha-final',$('bold-kbd'),2);
+    record('Menu flutuante dentro da barra lateral não altera as linhas dela',!audit().findings.some(f=>$('float').contains(document.querySelector(f.selector))) && lines('float')?.starts.includes(55),lines('float'));
+
+    await provoke('Nível da árvore 2 px fora',$('t-config'),'paddingLeft','22px','linha-texto',$('t-config'),2);
+    record('Degraus de 8 px entre níveis da árvore não são acusados',lineFindings().length===0);
+    await provoke('Título fora da lista 4 px fora da linha do primeiro nível',$('tree-title'),'paddingLeft','16px','linha-texto',$('tree-title'),4);
+    $('t-intro').style.paddingLeft='3px';
+    const twice=audit().findings;
+    record('Dentro do contêiner, as linhas substituem a comparação entre irmãos',twice.length===1 && twice[0].rule==='linha-texto' && at(twice[0],$('t-intro-link')),twice);
+    $('t-intro').style.paddingLeft='';
+
+    await provoke('Título do diálogo 2 px fora',$('dlg-title'),'paddingLeft','2px','linha-texto',$('dlg-title'),2);
+    await provoke('Campo 3 px fora: nem a caixa nem o texto na linha',$('name'),'marginLeft','3px','linha-caixa',$('name'),3);
+    await provoke('Botão fechar alinhado pela caixa deixa o desenho 6 px fora',$('close'),'right','24px','linha-final',$('close').firstElementChild,6);
+
+    await provoke('Lateral rtl: cabeçalho 3 px fora',$('rtl-sec'),'paddingRight','15px','linha-texto',$('rtl-sec'),3);
+    await provoke('Lateral rtl: ícone 3 px fora da coluna',$('rtl-icon'),'marginRight','3px','coluna-icones',$('rtl-icon'),3);
+
+    record('Contêiner sem semântica fica de fora por padrão',lineFindings().length===0);
+    setup({selectors:{lines:'#plain'}});
+    const plain=lineFindings();
+    record('Adaptador inclui um contêiner sem semântica',plain.length===1 && plain[0].rule==='linha-texto' && at(plain[0],$('plain-sec')) && plain[0].deltaPx===3,plain);
+    setup({rules:{'linha-texto':false},selectors:{lines:'#plain'}});
+    record('Regra desligada pelo adaptador não acusa',lineFindings().length===0,lineFindings());
+    setup({tolerancePx:3,selectors:{lines:'#plain'}});
+    record('Tolerância do adaptador vale para as linhas',lineFindings().length===0,lineFindings());
+    setup();
+
+    const before=VisualInspector.snapshot();
+    $('sec1').style.paddingLeft='15px';
+    const changed=VisualInspector.diff(before);
+    record('Comparação acusa o desvio introduzido',changed.findings.introduced.some(f=>f.rule==='linha-texto'),changed.findings);
+    $('sec1').style.paddingLeft='';
+    record('Comparação após restauração não deixa achados',!VisualInspector.diff(before).findings.introduced.length);
+
+    // Com um diálogo modal, só a camada da frente é medida.
+    $('dlg').close(); $('dlg').showModal();
+    $('sec1').style.paddingLeft='15px';
+    record('Desvio coberto por um modal fica de fora',lineFindings().length===0,lineFindings());
+    $('dlg-title').style.paddingLeft='2px';
+    const modal=lineFindings();
+    record('Desvio dentro do modal é acusado',modal.length===1 && at(modal[0],$('dlg-title')),modal);
+    $('sec1').style.paddingLeft=$('dlg-title').style.paddingLeft='';
+    $('dlg').close(); $('dlg').show();
+
+    record('Restauração sem achados residuais',audit().findings.length===0,audit().findings);
+    window.visualTestResults={passed:results.every(r=>r.passed),results};
+    $('result').textContent=results.map(r=>(r.passed?'PASSOU':'FALHOU')+' — '+r.name).join('\n');
+    return window.visualTestResults;
+  };
+  document.getElementById('run').addEventListener('click',runVisualTests);
+</script>
+</html>

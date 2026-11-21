@@ -61,13 +61,14 @@ npx playwright install chromium
 npm test
 ```
 
-Os testes abrem [`tests/browser.html`](tests/browser.html), [`tests/context.html`](tests/context.html) e [`tests/focus.html`](tests/focus.html) no Chromium. Cada cenário provoca um desvio, confere que o detector o acusa e restaura o estado; os de contexto conferem tokens, temas, componentes e tecnologias; os de foco abrem modais em div, declarados e nativos; os de interação usam o painel com o ponteiro, inclusive sob um diálogo modal.
+Os testes abrem [`tests/browser.html`](tests/browser.html), [`tests/context.html`](tests/context.html), [`tests/focus.html`](tests/focus.html) e [`tests/lines.html`](tests/lines.html) no Chromium. Cada cenário provoca um desvio, confere que o detector o acusa e restaura o estado; os de contexto conferem tokens, temas, componentes e tecnologias; os de foco abrem modais em div, declarados e nativos; os de linhas deslocam texto, ícones, rótulos, caixas e itens finais em barra lateral, menu, árvore, diálogo e rtl, em 1280 e 390 px e em uma lista de 3000 linhas; os de interação usam o painel com o ponteiro, inclusive sob um diálogo modal.
 
 Para rodar à mão, sirva a raiz do projeto com `python3 -m http.server 8766 --bind 127.0.0.1`, abra `http://127.0.0.1:8766/tests/browser.html` em uma janela de pelo menos 1280×800 e clique **Executar testes**.
 
 ## Limites
 
 - Níveis são inferidos do DOM, sem promessa de corresponder a nomes de componentes do framework.
+- As linhas de contêiner acusam desvios de até 8 px de uma linha mais usada; recuos maiores são tratados como hierarquia.
 - Baselines e limites de glifos são estimativas; caixas de texto usam `Range`.
 - Só a área visível e a camada em foco são auditadas. A ordem de empilhamento do modo foco é estimada onde o teste de ponto do navegador não alcança.
 - O inspetor enxerga o documento em que foi injetado; frames precisam de injeção própria.
